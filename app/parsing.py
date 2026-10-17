@@ -180,6 +180,12 @@ _LETTER_AFTER = re.compile(
 _UNIT_COUNT = re.compile(r"(?<!\d)(\d{1,2})\s*(?:units?|bags?|bottles?|pints?|packets?)\b", re.I)
 _STAFF = re.compile(r"\b(?i:this is|my name is|i am|i'm|name is|main)\s+([A-Z][a-z]{2,15})\b")
 _NOT_NAMES = {"Sorry", "Calling", "From", "Speaking", "Not", "The", "Blood", "Here", "Busy", "Checking"}
+_STAFF_ANY = re.compile(r"\b(?:this is|my name is|name is)\s+([A-Za-z]{3,15})\b", re.I)
+_NOT_NAME_WORDS = {
+    "sorry", "calling", "from", "speaking", "not", "the", "blood", "here", "busy", "checking", "available",
+    "fine", "okay", "sure", "correct", "right", "wrong", "going", "coming", "the", "for", "about", "only",
+    "what", "who", "your", "our", "staff", "doctor", "nurse", "reception", "counter", "hospital", "bank",
+}
 _NEGATE = re.compile(r"\b(no|not|nope|nah|nahi|nahin|illa|wrong|galat|cancel)\b", re.I)
 _BENIGN = re.compile(r"\b(no|koi) (problem|issue|worries|tension|dikkat)\b|\bnot a problem\b", re.I)
 _UNAVAILABLE = re.compile(
@@ -198,6 +204,8 @@ _FILLER = {
     "hai", "he", "h", "sir", "madam", "maam", "ma'am", "mam", "bhai", "that's", "thats", "that", "is", "it", "it's",
     "its", "all", "fine", "good", "um", "umm", "uh", "hmm", "ah", "achha", "acha", "accha", "so", "very", "true",
     "everything", "we", "will", "keep", "kept", "aside", "rakhenge", "of", "blood", "the", "same",
+    # STT tail noise seen on a real call ("sure perfect work")
+    "work", "works", "great", "thanks", "thank", "you",
 }
 _TIME = re.compile(r"\b(?:for )?\d+ (?:hours?|hrs?|minutes?|mins?|ghante?|ghanta)\b", re.I)
 _CONFIRM = re.compile(r"\bconfirm", re.I)
@@ -282,10 +290,14 @@ def parse_fee(transcript: str) -> int | None:
 
 
 def parse_staff(transcript: str) -> str | None:
+    """Staff name for the family ('confirmed by Ramesh'). STT often lowercases names ('my name is
+    arian'), so this match is case-insensitive. _STAFF stays capitalised-only because _clean_yes
+    strips its matches, and stripping 'this is wrong' would hide a no."""
     for raw in (ln.split(":", 1)[1] for ln in transcript.splitlines() if ln.lower().startswith("user:")):
-        for m in _STAFF.finditer(raw):
-            if m.group(1) not in _NOT_NAMES:
-                return m.group(1)
+        for m in _STAFF_ANY.finditer(raw):
+            name = m.group(1).capitalize()
+            if name not in _NOT_NAMES and m.group(1).lower() not in _NOT_NAME_WORDS:
+                return name
     return None
 
 
