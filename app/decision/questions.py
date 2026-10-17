@@ -1,66 +1,64 @@
 """Every question the decision model is asked, defined once.
 
-Keep each question atomic (one gut-check judgement). Weighting and combining
-happens in code (ranking.py), so priorities change without touching prompts.
+Each question is atomic (one gut-check judgement about one call). Safety logic
+(the verification gate) and ranking combine them in code, not in a prompt.
 """
 from __future__ import annotations
 
 from typing import Any
 
-from ..schemas import CATEGORIES, CallRecord, ErrandRequest
-
-RELIABILITY_LEVELS = [
-    "Evasive or vague: no clear price or commitment",
-    "Somewhat clear: price given but hedged",
-    "Clear and committed: firm price and slot",
-]
+from ..schemas import COMPONENTS, GROUP_SPOKEN, BloodRequest, CallRecord
 
 OUTCOMES = {
-    "quoted": "Gave a price and can do the job",
-    "no_slot": "Cannot do it in the requested time",
-    "refused": "Does not offer this service or declined",
-    "callback_later": "Asked to call back later or was busy",
-    "wrong_number": "Wrong number or not a business",
+    "available": "Has the requested blood group and component now",
+    "partial": "Has the requested group but fewer units than needed",
+    "not_available": "Does not have the requested group or component now",
+    "closed": "Blood bank is closed or cannot issue blood now",
+    "wrong_department": "Reached someone who cannot check blood stock and did not transfer",
+    "callback_later": "Asked to call back later or was too busy",
 }
 
 
-def intake_questions() -> dict[str, Any]:
+def _need(req: BloodRequest) -> str:
+    return f"{GROUP_SPOKEN[req.blood_group]} ({req.blood_group}) {COMPONENTS[req.component]}"
+
+
+def call_questions(req: BloodRequest) -> dict[str, Any]:
+    need = _need(req)
     return {
-        "category": {
-            "type": "choice",
-            "instructions": "Which kind of local business should be called for this request?",
-            "criteria": dict(CATEGORIES),
-        },
-        "urgent": {"type": "noul", "instructions": "The customer needs this today or it is an emergency."},
-    }
-
-
-def intake_state(req: ErrandRequest) -> dict[str, Any]:
-    return {"request": req.task, "area": req.area, "when": req.time_window}
-
-
-def call_questions() -> dict[str, Any]:
-    return {
-        "got_quote": {
+        "has_requested": {
             "type": "noul",
-            "instructions": "The business gave a concrete total price for the requested job.",
+            "instructions": f"The blood bank staff said they currently have {need} available.",
         },
-        "within_budget": {
+        "confirmed_readback": {
             "type": "noul",
-            "instructions": "The quoted total, including any extra charges, is within the customer's budget.",
+            "instructions": (
+                f"When the assistant read back {GROUP_SPOKEN[req.blood_group]} and the number of units, "
+                "the staff clearly agreed it was correct."
+            ),
         },
-        "hidden_charges": {
+        "mentioned_other_group": {
             "type": "noul",
-            "instructions": "The business mentioned charges beyond the base price (visit fee, parts, GST, transport).",
+            "instructions": (
+                f"The staff's answer about what is available names a blood group other than "
+                f"{GROUP_SPOKEN[req.blood_group]}, or is ambiguous about positive vs negative."
+            ),
         },
-        "slot_fits": {
+        "enough_units": {
             "type": "noul",
-            "instructions": "The business can do the job within the customer's requested time window.",
+            "instructions": f"They have at least {req.units} units available.",
         },
-        "reliability": {
-            "type": "score",
-            "instructions": "How clear and committed the business sounded about price and timing.",
-            "criteria": RELIABILITY_LEVELS,
+        "replacement_donor_required": {
+            "type": "noul",
+            "instructions": "The blood bank requires the family to bring a replacement donor.",
+        },
+        "will_hold": {
+            "type": "noul",
+            "instructions": "The staff agreed to keep the units aside for this patient for some time.",
+        },
+        "open_now": {
+            "type": "noul",
+            "instructions": "The blood bank is open and can issue blood right now.",
         },
         "outcome": {
             "type": "choice",
@@ -70,58 +68,46 @@ def call_questions() -> dict[str, Any]:
     }
 
 
-def call_state(req: ErrandRequest, call: CallRecord) -> dict[str, Any]:
+def call_state(req: BloodRequest, call: CallRecord) -> dict[str, Any]:
     return {
-        "customer_request": {
-            "task": req.task,
-            "area": req.area,
-            "time_window": req.time_window,
-            "budget_rupees": req.budget,
-        },
-        "business": {"name": call.vendor.name, "rating": call.vendor.rating},
-        "quoted_price_rupees": call.price,
+        "request": {"blood_group": req.blood_group, "component": COMPONENTS[req.component], "units_needed": req.units},
+        "facility": call.facility.name,
+        "parsed": {"units_said": call.units, "groups_heard": call.groups_heard, "fee_rupees": call.fee},
         "transcript": call.transcript,
     }
 
 
-def final_questions(req: ErrandRequest, candidates: list[CallRecord]) -> dict[str, Any]:
-    focus = {
-        "cheapest": "the lowest total cost with no nasty surprises",
-        "fastest": "the earliest reliable slot",
-        "reliable": "the most trustworthy, committed business",
-    }[req.priority]
+def final_questions(req: BloodRequest, candidates: list[CallRecord]) -> dict[str, Any]:
     return {
-        "best_vendor": {
+        "best_facility": {
             "type": "choice",
-            "instructions": f"Which business should the customer book? The customer cares most about {focus}.",
+            "instructions": (
+                f"The family needs {req.units} units of {_need(req)} urgently. Which blood bank should "
+                "they go to first? Prefer enough units, no replacement donor, units held, and less travel time."
+            ),
             "criteria": {
-                c.id: f"{c.vendor.name}: Rs {c.price}, {c.slot or 'slot unclear'}, rated {c.vendor.rating}"
+                c.id: (
+                    f"{c.facility.name}: {c.units or '?'} units, {c.eta_min} min away"
+                    + (", needs replacement donor" if c.signals.get("replacement_donor_required", 0) >= 0.5 else "")
+                    + (", will hold" if c.signals.get("will_hold", 0) >= 0.5 else "")
+                )
                 for c in candidates
             },
-        },
-        "safe_to_auto_book": {
-            "type": "noul",
-            "instructions": (
-                "Booking the best option without asking the customer is safe: price, slot and terms "
-                "are clear and match the request."
-            ),
         },
     }
 
 
-def final_state(req: ErrandRequest, candidates: list[CallRecord]) -> dict[str, Any]:
+def final_state(req: BloodRequest, candidates: list[CallRecord]) -> dict[str, Any]:
     return {
-        "customer_request": req.model_dump(include={"task", "area", "time_window", "budget", "priority"}),
+        "request": req.model_dump(include={"blood_group", "component", "units", "area"}),
         "candidates": [
             {
                 "id": c.id,
-                "name": c.vendor.name,
-                "price_rupees": c.price,
-                "slot": c.slot,
-                "rating": c.vendor.rating,
+                "facility": c.facility.name,
+                "units": c.units,
+                "eta_min": c.eta_min,
                 "signals": c.signals,
                 "rank_score": c.rank_score,
-                "transcript": c.transcript[-1200:],
             }
             for c in candidates
         ],

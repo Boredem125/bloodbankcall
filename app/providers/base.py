@@ -4,7 +4,7 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
-from ..schemas import Vendor
+from ..schemas import Facility, Phone
 
 
 class CallStatus(BaseModel):
@@ -20,7 +20,7 @@ class CallStatus(BaseModel):
 class CallProvider(Protocol):
     name: str
 
-    async def start(self, vendor: Vendor, user_data: dict[str, Any]) -> str:
+    async def start(self, facility: Facility, phone: Phone, user_data: dict[str, Any]) -> str:
         """Place a call; returns an execution id."""
         ...
 

@@ -97,3 +97,49 @@ def test_times_and_durations_are_not_prices():
 def test_slot():
     assert parse_slot(HIDDEN) == "5 pm"
     assert parse_slot("user: tomorrow 9 am works", {"available_slot": "Sunday 10 am"}) == "Sunday 10 am"
+
+
+# ---------------------------------------------------------------- blood bank calls
+from app.parsing import parse_fee, parse_groups, parse_staff, parse_units, readback_confirmed  # noqa: E402
+
+BB = """assistant: Do you have O negative, that is O minus, packed red cells available right now? We need 2 units.
+user: yes this is Ramesh, we have three units, fee is 1550 rupees per unit
+assistant: Can you keep them aside for one hour?
+user: yes we can hold for one hour
+assistant: Confirming: O negative, that is O minus, 3 units, kept aside, correct?
+user: yes correct, no problem"""
+
+
+@pytest.mark.parametrize(
+    "spoken,groups",
+    [
+        ("yes we have O negative", ["O-"]),
+        ("zero negative is there", ["O-"]),  # STT hears "O" as zero
+        ("oh minus two units", ["O-"]),
+        ("B +ve and AB-", ["B+", "AB-"]),
+        ("AB positive", ["AB+"]),
+    ],
+)
+def test_parse_groups(spoken, groups):
+    assert parse_groups(spoken) == groups
+
+
+def test_blood_call_fields():
+    assert parse_units(BB) == 3
+    assert parse_fee(BB) == 1550
+    assert parse_staff(BB) == "Ramesh"
+    assert readback_confirmed(BB, "O-") is True
+
+
+def test_need_is_not_mistaken_for_stock():
+    t = "assistant: Do you have O negative? We need 2 units.\nuser: sorry, not available"
+    assert parse_units(t) is None
+
+
+def test_readback_rejected():
+    t = "assistant: Confirming: O negative, that is O minus, correct?\nuser: no, I said O positive"
+    assert readback_confirmed(t, "O-") is False
+
+
+def test_no_readback():
+    assert readback_confirmed("user: yes we have", "O-") is None

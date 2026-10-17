@@ -6,88 +6,118 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-Priority = Literal["cheapest", "fastest", "reliable"]
+BloodGroup = Literal["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]
+BLOOD_GROUPS: list[str] = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]
 
-CATEGORIES: dict[str, str] = {
-    "ac_repair": "AC repair, servicing or gas refill",
-    "plumber": "Plumbing: leaks, taps, pipes, drainage",
-    "electrician": "Electrical work: wiring, switches, fans, inverter",
-    "pg_rental": "PG, hostel or room rental",
-    "caterer": "Catering or food for an event",
-    "movers": "Packers and movers, shifting a home",
+# How the agent says each group on the phone: name plus an unmistakable second form.
+GROUP_SPOKEN: dict[str, str] = {
+    g: f"{g[:-1]} {'positive' if g.endswith('+') else 'negative'}" for g in BLOOD_GROUPS
+}
+GROUP_CONFIRM: dict[str, str] = {
+    g: f"{g[:-1]} {'plus' if g.endswith('+') else 'minus'}" for g in BLOOD_GROUPS
 }
 
+COMPONENTS: dict[str, str] = {
+    "prbc": "packed red cells (PRBC)",
+    "whole_blood": "whole blood",
+    "platelets": "platelets",
+    "ffp": "fresh frozen plasma",
+}
+
+# Live call states that end a call.
 TERMINAL_STATUSES = {
     "completed", "no-answer", "busy", "failed", "canceled", "stopped", "error", "balance-low",
 }
+NOT_REACHED = {"no-answer", "busy", "failed", "canceled", "stopped", "error", "timeout", "voicemail"}
+
+# What we tell the family about a facility. Only "confirmed" is ever presented as available.
+Availability = Literal["confirmed", "unconfirmed", "not_available", "closed", "unknown"]
 
 
 def _id() -> str:
     return uuid.uuid4().hex[:10]
 
 
-class ErrandRequest(BaseModel):
-    task: str = Field(..., min_length=3, description="Free text, e.g. 'AC service, cooling is weak'")
-    area: str = "HSR Layout, Bengaluru"
-    time_window: str = "tomorrow evening"
-    budget: int = Field(800, gt=0, description="Max total price in rupees")
-    priority: Priority = "cheapest"
-    language: str = "Hindi or English"
-    auto_book_limit: int = Field(0, ge=0, description="Auto-book without asking if price <= this; 0 disables")
+class BloodRequest(BaseModel):
+    blood_group: BloodGroup = "O-"
+    component: Literal["prbc", "whole_blood", "platelets", "ffp"] = "prbc"
+    units: int = Field(2, ge=1, le=10)
+    area: str = "HSR Layout"  # where the patient is; used for travel time
+    hospital: str = Field("", max_length=120, description="Patient's hospital (no patient name: privacy)")
+    language: str = "English or Hindi"
 
 
-class Vendor(BaseModel):
+class Phone(BaseModel):
+    number: str
+    label: str = "blood bank"  # blood bank | switchboard | casualty
+
+
+class Facility(BaseModel):
     id: str
     name: str
-    category: str
     area: str
-    rating: float
-    phone: str
+    lat: float
+    lon: float
+    open_24x7: bool = False
+    phones: list[Phone]
     sim: dict[str, Any] = Field(default_factory=dict)
 
 
 class Decision(BaseModel):
     """One call to the decision model, kept for the audit trail."""
 
-    stage: str  # intake | call | final
+    stage: str  # call | final
     backend: str
     latency_ms: float
     answers: dict[str, Any]
-    subject: str | None = None  # call id or None
+    subject: str | None = None
 
 
 class CallRecord(BaseModel):
     id: str = Field(default_factory=_id)
-    vendor: Vendor
-    purpose: Literal["quote", "book"] = "quote"
+    facility: Facility
+    phone: Phone
+    attempt: int = 1  # 2+ = fallback number for the same facility
     execution_id: str | None = None
     status: str = "pending"
     transcript: str = ""
-    price: int | None = None
-    slot: str | None = None
-    extras: str | None = None
+    # parsed from the transcript
+    units: int | None = None
+    fee: int | None = None
+    staff: str | None = None
+    groups_heard: list[str] = Field(default_factory=list)
+    # decided
     signals: dict[str, float] = Field(default_factory=dict)
     outcome: str | None = None
+    availability: Availability = "unknown"
+    gate_reasons: list[str] = Field(default_factory=list)
     rank_score: float | None = None
-    viable: bool = False
+    eta_min: int | None = None
+    confirmed_at: float | None = None
     cost_cents: float = 0.0
     duration_s: float = 0.0
     recording_url: str | None = None
     error: str | None = None
 
 
-class Errand(BaseModel):
+class PlanItem(BaseModel):
+    call_id: str
+    facility: str
+    units: int
+
+
+class Search(BaseModel):
     id: str = Field(default_factory=_id)
     created_at: float = Field(default_factory=time.time)
-    request: ErrandRequest
-    category: str | None = None
-    status: str = "planning"  # planning | calling | deciding | awaiting_approval | booking | booked | failed
+    request: BloodRequest
+    status: str = "calling"  # calling | deciding | done | failed
     calls: list[CallRecord] = Field(default_factory=list)
     decisions: list[Decision] = Field(default_factory=list)
     chosen_call_id: str | None = None
     choice_confidence: float | None = None
-    auto_book_probability: float | None = None
+    plan: list[PlanItem] = Field(default_factory=list)  # may combine facilities for enough units
     reason: str | None = None
+    warnings: list[str] = Field(default_factory=list)
     log: list[str] = Field(default_factory=list)
 
     def call(self, call_id: str) -> CallRecord:

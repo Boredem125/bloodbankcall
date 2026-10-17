@@ -15,13 +15,13 @@ class Settings(BaseSettings):
     bolna_agent_id: str = ""
     bolna_from_number: str = ""
     bolna_base_url: str = "https://api.bolna.ai"
-    max_live_calls_per_errand: int = 3
+    max_live_calls_per_search: int = 4  # hard cap on paid calls per search (fallback numbers count)
     live_concurrency: int = 2  # Bolna account concurrency (GET /user/me -> concurrency.max)
-    booking_call: bool = False  # place a real confirmation call to the chosen vendor
     poll_interval_s: float = 4.0
     call_timeout_s: float = 300.0
 
-    # Decisions: jev | clef | mock. Failures fall back down the chain to mock.
+    # Decisions: jev | clef | mock. Failures fall back down the chain; mock answers are
+    # never trusted to confirm availability during live calls.
     decision_backend: str = "mock"
     typesafe_api_key: str = ""
     typesafe_url: str = "https://api.typesafe.ai/v1/systemone"
@@ -30,15 +30,14 @@ class Settings(BaseSettings):
     cf_api_token: str = ""
     clef_model: str = "clef-flash"
 
-    # Orchestration
-    initial_calls: int = 5
-    min_viable_quotes: int = 2
-    auto_book_confidence: float = 0.75
+    # Search
+    wave_size: int = 6  # simulated calls per wave (live waves use live_concurrency)
+    min_confirmed: int = 2  # stop calling once this many confirm and units are covered
+    search_deadline_s: float = 240.0  # no new waves after this; an emergency can't wait
     sim_speed: float = 1.0  # >1 makes simulated calls faster
     sim_poll_s: float = 0.5
 
-    customer_name: str = "Ananya"
-    vendors_file: Path = ROOT / "data" / "vendors.json"
+    facilities_file: Path = ROOT / "data" / "facilities.json"
     sim_scripts_file: Path = ROOT / "data" / "sim_scripts.json"
 
 

@@ -1,80 +1,107 @@
 {
-  "good_value": {
+  "has_stock": {
     "lines": [
-      "assistant: Namaste, am I speaking with {business}? I'm calling for {customer_name}, who needs {task} in {area}.",
-      "user: Haan ji, boliye.",
-      "assistant: Can you do it {time_window}? And what would the total cost be?",
-      "user: Yes, we have a slot at {slot}. Total will be {price} rupees, service included.",
-      "assistant: Is there any visiting charge or anything extra on top of that?",
-      "user: No sir, {price} is final. Nothing more.",
-      "assistant: Great, so {price} rupees total at {slot}. I'll confirm with {customer_name} and get back to you. Thank you!",
-      "user: Theek hai, thank you."
+      "assistant: Namaste, I'm an AI assistant calling for a patient's family; this call may be recorded. Is this the blood bank at {facility_name}?",
+      "user: Yes, blood bank here. Tell me.",
+      "assistant: Do you have {blood_group_spoken}, that is {blood_group_confirm}, {component} available right now? We need {units} units.",
+      "user: Yes, {blood_group_spoken} is available. We have {stock} units.",
+      "assistant: Is a replacement donor required, and what is the processing fee per unit?",
+      "user: No replacement needed. Fee is {fee} rupees per unit.",
+      "assistant: Can you keep them aside for one hour if the family comes now?",
+      "user: Yes, we can hold it for one hour. This is {staff}.",
+      "assistant: Confirming: {blood_group_spoken}, that is {blood_group_confirm}, {stock} units of {component}, kept aside for one hour, correct?",
+      "user: Yes, correct.",
+      "assistant: Thank you {staff}. The family will bring the doctor's requisition form and the patient's sample."
     ]
   },
-  "cheap_hidden": {
+  "switchboard": {
     "lines": [
-      "assistant: Hello, is this {business}? I'm calling for {customer_name}, who needs {task} in {area}.",
-      "user: Yes yes, tell me.",
-      "assistant: Can you come {time_window}? What will it cost?",
-      "user: Service is only {base} rupees, sir, cheapest in the area. Slot at {slot}.",
-      "assistant: Any visiting charge or extra charges?",
-      "user: Visiting charge {extra_fee} alag se, and parts or gas extra if needed.",
-      "assistant: So the minimum total would be how much?",
-      "user: Minimum {price} rupees total, parts extra."
+      "assistant: Namaste, I'm an AI assistant calling for a patient's family; this call may be recorded. Could you connect me to the blood bank please?",
+      "user: City Hospital reception. Hold on, transferring to blood bank.",
+      "user: Blood bank, this is {staff}, tell me.",
+      "assistant: Do you have {blood_group_spoken}, that is {blood_group_confirm}, {component} available right now? We need {units} units.",
+      "user: Yes, we have {stock} units of {blood_group_spoken}.",
+      "assistant: Is a replacement donor required, and what is the processing fee per unit?",
+      "user: No donor needed. {fee} rupees per unit.",
+      "assistant: Can you keep them aside for one hour if the family comes now?",
+      "user: Okay, we will keep it aside.",
+      "assistant: Confirming: {blood_group_spoken}, that is {blood_group_confirm}, {stock} units of {component}, correct?",
+      "user: Haan, correct."
+    ],
+    "ring_s": 4
+  },
+  "replacement": {
+    "lines": [
+      "assistant: Namaste, I'm an AI assistant calling for a patient's family; this call may be recorded. Is this the blood bank at {facility_name}?",
+      "user: Yes.",
+      "assistant: Do you have {blood_group_spoken}, that is {blood_group_confirm}, {component} available right now? We need {units} units.",
+      "user: Yes, {stock} units of {blood_group_spoken} are there.",
+      "assistant: Is a replacement donor required, and what is the processing fee per unit?",
+      "user: You must bring a replacement donor, one donor per unit. Fee {fee} rupees.",
+      "assistant: Can you keep them aside for one hour if the family comes now?",
+      "user: No, we cannot hold, first come first served.",
+      "assistant: Confirming: {blood_group_spoken}, that is {blood_group_confirm}, {stock} units, replacement donor required, correct?",
+      "user: Yes."
     ]
   },
-  "expensive": {
+  "partial": {
     "lines": [
-      "assistant: Hi, am I speaking with {business}? I'm calling for {customer_name} about {task} in {area}.",
-      "user: Yes, this is {business}.",
-      "assistant: Can you do it {time_window}, and what is the total cost?",
-      "user: We can come at {slot}. We charge {price} rupees, best certified technicians.",
-      "assistant: The customer's budget is around {budget} rupees. Is there any flexibility?",
-      "user: Sorry sir, {price} is our fixed rate, all inclusive."
-    ]
-  },
-  "no_slot": {
-    "lines": [
-      "assistant: Namaste, is this {business}? I'm calling for {customer_name}, who needs {task} in {area}.",
+      "assistant: Namaste, I'm an AI assistant calling for a patient's family; this call may be recorded. Is this the blood bank at {facility_name}?",
       "user: Haan ji.",
-      "assistant: Is there a slot {time_window}?",
-      "user: Sorry, tomorrow we are fully booked. Day after we can come.",
-      "assistant: Understood. What would the price be?",
-      "user: Day after, {price} rupees.",
-      "assistant: Okay, thank you, I'll let {customer_name} know."
+      "assistant: Do you have {blood_group_spoken}, that is {blood_group_confirm}, {component} available right now? We need {units} units.",
+      "user: We have only {stock} unit of {blood_group_spoken}.",
+      "assistant: Is a replacement donor required, and what is the processing fee per unit?",
+      "user: Not required. {fee} rupees.",
+      "assistant: Confirming: {blood_group_spoken}, that is {blood_group_confirm}, {stock} unit of {component}, correct?",
+      "user: Yes, correct. This is {staff}."
     ]
   },
-  "hedgy": {
+  "out_of_stock": {
     "lines": [
-      "assistant: Hello, {business}? I'm calling for {customer_name} about {task} in {area}.",
-      "user: Haan, boliye.",
-      "assistant: Can you do it {time_window}, and what would it cost?",
-      "user: Roughly {price} rupees, depends on the problem. Shayad {slot}, dekhte hain.",
-      "assistant: Can you confirm a fixed price and time?",
-      "user: Can't say exactly before seeing it, maybe {price}, maybe more."
+      "assistant: Namaste, I'm an AI assistant calling for a patient's family; this call may be recorded. Is this the blood bank at {facility_name}?",
+      "user: Yes, blood bank.",
+      "assistant: Do you have {blood_group_spoken}, that is {blood_group_confirm}, {component} available right now? We need {units} units.",
+      "user: Sorry, {blood_group_spoken} is not available right now. We only have {other_group}.",
+      "assistant: Understood, thank you for checking."
     ]
   },
-  "refused": {
+  "misheard": {
     "lines": [
-      "assistant: Hi, is this {business}? I'm calling for {customer_name}, who needs {task} in {area}.",
-      "user: No sir, we don't do that, we only do new installations.",
-      "assistant: No problem, thank you for your time."
+      "assistant: Namaste, I'm an AI assistant calling for a patient's family; this call may be recorded. Is this the blood bank at {facility_name}?",
+      "user: Yes, tell me.",
+      "assistant: Do you have {blood_group_spoken}, that is {blood_group_confirm}, {component} available right now? We need {units} units.",
+      "user: Yes yes, zero positive is there, {stock} units.",
+      "assistant: Confirming: {blood_group_spoken}, that is {blood_group_confirm}, correct?",
+      "user: No, I said O positive. Negative we don't have.",
+      "assistant: Understood, thank you for clarifying."
+    ]
+  },
+  "ambiguous": {
+    "lines": [
+      "assistant: Namaste, I'm an AI assistant calling for a patient's family; this call may be recorded. Is this the blood bank at {facility_name}?",
+      "user: Haan.",
+      "assistant: Do you have {blood_group_spoken}, that is {blood_group_confirm}, {component} available right now? We need {units} units.",
+      "user: Yes, O is there, {stock} units I think.",
+      "assistant: Confirming: {blood_group_spoken}, that is {blood_group_confirm}, correct?",
+      "user: I think so, please check at the counter once.",
+      "assistant: Thank you."
+    ]
+  },
+  "closed": {
+    "lines": [
+      "assistant: Namaste, I'm an AI assistant calling for a patient's family; this call may be recorded. Is this the blood bank at {facility_name}?",
+      "user: Blood bank is closed now, it opens at 9 am tomorrow.",
+      "assistant: Thank you."
     ]
   },
   "callback": {
     "lines": [
-      "assistant: Hello, {business}? I'm calling for {customer_name} about {task}.",
-      "user: I'm on a job right now, please call back later.",
-      "assistant: Sure, thank you."
+      "assistant: Namaste, I'm an AI assistant calling for a patient's family; this call may be recorded. Is this the blood bank at {facility_name}?",
+      "user: Very busy right now, call back later.",
+      "assistant: Okay, thank you."
     ]
   },
-  "no_answer": {"lines": [], "final": "no-answer"},
+  "no_answer": {"lines": [], "final": "no-answer", "ring_s": 7},
   "busy": {"lines": [], "final": "busy"},
-  "booking": {
-    "lines": [
-      "assistant: Hello {business}, this is the assistant calling back for {customer_name}. We'd like to book {task} at {slot} for {price} rupees.",
-      "user: Okay, confirmed. Our technician will reach {area} at {slot}.",
-      "assistant: Thank you! {customer_name} will be expecting you."
-    ]
-  }
+  "voicemail": {"lines": [], "final": "voicemail", "ring_s": 5}
 }

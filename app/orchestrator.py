@@ -1,4 +1,8 @@
-"""Errand pipeline: classify -> dial in parallel -> decide per call -> rank -> pick -> book."""
+"""Blood search pipeline.
+
+call facilities in waves (24x7 + nearest first) -> per call: parse + typed decisions
+-> safety gate -> rank confirmed -> pick + plan units -> plain-language result.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -7,153 +11,166 @@ import time
 
 from .config import Settings
 from .decision import FallbackEngine
-from .decision.base import choice, noul, score
-from .decision.questions import (
-    RELIABILITY_LEVELS,
-    call_questions,
-    call_state,
-    final_questions,
-    final_state,
-    intake_questions,
-    intake_state,
-)
-from .parsing import parse_price, parse_slot
+from .decision.base import choice, noul
+from .decision.questions import call_questions, call_state, final_questions, final_state
+from .facilities import call_order, eta_minutes
+from .parsing import parse_fee, parse_staff, parse_units, vendor_groups
 from .providers import CallProvider
-from .ranking import rank
-from .schemas import TERMINAL_STATUSES, CallRecord, Decision, Errand, Vendor
+from .ranking import gate, plan_units, rank, units_covered
+from .schemas import (
+    COMPONENTS,
+    GROUP_CONFIRM,
+    GROUP_SPOKEN,
+    NOT_REACHED,
+    TERMINAL_STATUSES,
+    CallRecord,
+    Decision,
+    Facility,
+    Phone,
+    Search,
+)
 from .store import Store
-from .vendors import vendors_for
 
 log = logging.getLogger(__name__)
+SIGNALS = [
+    "has_requested", "confirmed_readback", "mentioned_other_group", "enough_units",
+    "replacement_donor_required", "will_hold", "open_now",
+]
 
 
 class Orchestrator:
-    def __init__(
-        self,
-        settings: Settings,
-        provider: CallProvider,
-        engine: FallbackEngine,
-        store: Store,
-        vendors: list[Vendor],
-    ) -> None:
+    def __init__(self, settings: Settings, provider: CallProvider, engine: FallbackEngine,
+                 store: Store, facilities: list[Facility]) -> None:
         self.s = settings
         self.provider = provider
         self.engine = engine
         self.store = store
-        self.vendors = vendors
+        self.facilities = facilities
         # Live calls beyond the account's concurrency wait here instead of being rejected by Bolna.
         self._lines = asyncio.Semaphore(max(settings.live_concurrency, 1))
+        self._budget: dict[str, int] = {}  # paid calls left, per search
 
     @property
     def live(self) -> bool:
         return self.provider.name != "sim"
 
-    def _emit(self, errand: Errand) -> None:
-        self.store.publish(errand)
+    def _emit(self, search: Search) -> None:
+        self.store.publish(search)
 
-    async def _decide(self, errand: Errand, stage: str, state, questions, subject: str | None = None):
+    async def _decide(self, search: Search, stage: str, state, questions, subject: str | None = None):
         answers, backend, ms = await self.engine.decide(state, questions)
-        errand.decisions.append(
+        search.decisions.append(
             Decision(stage=stage, backend=backend, latency_ms=round(ms, 1), answers=answers, subject=subject)
         )
-        return answers
+        return answers, backend
 
     # ------------------------------------------------------------------ main
-    async def run(self, errand_id: str) -> None:
-        errand = self.store.get(errand_id)
+    async def run(self, search_id: str) -> None:
+        search = self.store.get(search_id)
         try:
-            await self._run(errand)
+            await self._run(search)
         except Exception as exc:  # noqa: BLE001 - surface any failure on the dashboard
-            log.exception("errand %s failed", errand_id)
-            errand.status = "failed"
-            errand.reason = f"Something went wrong: {exc}"
-            self._emit(errand)
+            log.exception("search %s failed", search_id)
+            search.status = "failed"
+            search.reason = f"Something went wrong: {exc}. Call the blood banks directly."
+            self._emit(search)
 
-    async def _run(self, errand: Errand) -> None:
-        req = errand.request
-
-        answers = await self._decide(errand, "intake", intake_state(req), intake_questions())
-        errand.category, conf = choice(answers, "category")
-        errand.note(f"Classified as {errand.category} (p={conf:.2f})")
-        queue = vendors_for(self.vendors, errand.category)
-        if not queue:
-            errand.status, errand.reason = "failed", f"No businesses listed for {errand.category}."
-            self._emit(errand)
-            return
-
-        cap = self.s.max_live_calls_per_errand if self.live else len(queue)
-        batch = min(self.s.initial_calls, cap)
-        errand.status = "calling"
-        errand.note(f"Calling {min(batch, len(queue))} businesses in parallel")
-        self._emit(errand)
-
-        dialed = 0
-        while True:
-            next_vendors = queue[dialed: dialed + batch]
-            dialed += len(next_vendors)
-            await asyncio.gather(*(self._quote_call(errand, v) for v in next_vendors))
-            viable = rank(errand.calls, req.priority)
-            self._emit(errand)
-            room = min(cap, len(queue)) - dialed
-            if len(viable) >= self.s.min_viable_quotes or room <= 0:
-                break
-            batch = min(room, self.s.min_viable_quotes - len(viable) + 1)
-            errand.note(f"Only {len(viable)} usable quote(s); calling {batch} more")
-            self._emit(errand)
-
-        if not viable:
-            errand.status = "failed"
-            errand.reason = "No business gave a usable quote. Try a wider area or a different time."
-            self._emit(errand)
-            return
-
-        await self._pick(errand, viable)
-
-    # ------------------------------------------------------------- per call
-    async def _quote_call(self, errand: Errand, vendor: Vendor) -> None:
-        call = CallRecord(vendor=vendor)
-        errand.calls.append(call)
-        await self._place_and_track(errand, call, self._user_data(errand, vendor))
-        if call.status != "completed":
-            call.outcome = call.status
-            self._emit(errand)
-            return
-
-        call.price = call.price or parse_price(call.transcript)
-        call.slot = call.slot or parse_slot(call.transcript)
-        answers = await self._decide(
-            errand, "call", call_state(errand.request, call), call_questions(), subject=call.id
+    async def _run(self, search: Search) -> None:
+        req = search.request
+        queue = call_order(self.facilities, req.area)
+        self._budget[search.id] = self.s.max_live_calls_per_search if self.live else 10_000
+        deadline = time.monotonic() + self.s.search_deadline_s
+        wave = self.s.live_concurrency if self.live else self.s.wave_size
+        search.note(
+            f"Need {req.units} unit(s) of {req.blood_group} {COMPONENTS[req.component]} near {req.area}; "
+            f"{len(queue)} blood banks on file"
         )
-        outcome, _ = choice(answers, "outcome")
-        call.outcome = outcome
-        call.signals = {
-            "got_quote": noul(answers, "got_quote"),
-            "within_budget": noul(answers, "within_budget"),
-            "hidden_charges": noul(answers, "hidden_charges"),
-            "slot_fits": noul(answers, "slot_fits"),
-            "reliability": score(answers, "reliability", len(RELIABILITY_LEVELS)),
-            "quoted": float((answers["outcome"].get("probabilities") or {}).get("quoted", 1.0 if outcome == "quoted" else 0.0)),
-        }
-        errand.note(f"{vendor.name}: {outcome}" + (f", Rs {call.price}" if call.price else ""))
-        self._emit(errand)
+        self._emit(search)
 
-    async def _place_and_track(self, errand: Errand, call: CallRecord, user_data: dict) -> None:
+        next_i = 0
+        while next_i < len(queue) and self._budget[search.id] > 0:
+            if time.monotonic() > deadline:
+                search.note("Search time limit reached; deciding with what we have")
+                break
+            batch = queue[next_i: next_i + wave]
+            next_i += len(batch)
+            search.note(f"Calling {', '.join(f.name for f in batch)}")
+            self._emit(search)
+            await asyncio.gather(*(self._facility(search, f) for f in batch))
+            ranked = rank(search.calls)
+            covered = sum(c.units or 1 for c in ranked)
+            if len(ranked) >= self.s.min_confirmed and covered >= req.units:
+                break
+            if next_i < len(queue):
+                search.note(f"{len(ranked)} confirmed so far ({covered} unit(s)); calling more")
+        await self._finish(search)
+
+    # ------------------------------------------------------------ per facility
+    async def _facility(self, search: Search, f: Facility) -> None:
+        """Try each number of a facility until someone answers (direct line, then switchboard...)."""
+        for attempt, phone in enumerate(f.phones, start=1):
+            if self._budget[search.id] <= 0:
+                return
+            self._budget[search.id] -= 1
+            call = CallRecord(facility=f, phone=phone, attempt=attempt, eta_min=eta_minutes(search.request.area, f))
+            search.calls.append(call)
+            await self._place_and_track(search, call)
+            if call.status not in NOT_REACHED:
+                await self._assess(search, call)
+                return
+            if attempt < len(f.phones):
+                search.note(f"{f.name}: {call.status} on {phone.label}; trying {f.phones[attempt].label}")
+                self._emit(search)
+
+    async def _assess(self, search: Search, call: CallRecord) -> None:
+        req = search.request
+        t = call.transcript
+        call.units, call.fee, call.staff = parse_units(t), parse_fee(t), parse_staff(t)
+        call.groups_heard = vendor_groups(t)
+        answers, backend = await self._decide(search, "call", call_state(req, call), call_questions(req), call.id)
+        call.outcome, _ = choice(answers, "outcome")
+        call.signals = {k: noul(answers, k) for k in SIGNALS}
+        gate(call, req, trusted=not (self.live and backend == "mock"))
+        if call.availability == "confirmed":
+            call.confirmed_at = time.time()
+        search.note(
+            f"{call.facility.name}: {call.availability}"
+            + (f", {call.units} unit(s)" if call.units else "")
+            + (f" ({'; '.join(call.gate_reasons)})" if call.gate_reasons and call.availability == "unconfirmed" else "")
+        )
+        self._emit(search)
+
+    async def _place_and_track(self, search: Search, call: CallRecord) -> None:
         if not self.live:
-            return await self._dial(errand, call, user_data)
+            return await self._dial(search, call)
         call.status = "waiting for line"
-        self._emit(errand)
+        self._emit(search)
         async with self._lines:
-            await self._dial(errand, call, user_data)
+            await self._dial(search, call)
 
-    async def _dial(self, errand: Errand, call: CallRecord, user_data: dict) -> None:
+    def _user_data(self, search: Search, call: CallRecord) -> dict:
+        req = search.request
+        return {
+            "facility_name": call.facility.name,
+            "phone_label": call.phone.label,
+            "blood_group_spoken": GROUP_SPOKEN[req.blood_group],
+            "blood_group_confirm": GROUP_CONFIRM[req.blood_group],
+            "component": COMPONENTS[req.component],
+            "units": str(req.units),
+            "hospital": req.hospital or "a hospital",
+            "area": req.area,
+            "language": req.language,
+        }
+
+    async def _dial(self, search: Search, call: CallRecord) -> None:
         try:
-            call.execution_id = await self.provider.start(call.vendor, user_data)
+            call.execution_id = await self.provider.start(call.facility, call.phone, self._user_data(search, call))
         except Exception as exc:  # noqa: BLE001
             call.status, call.error = "failed", str(exc)
-            self._emit(errand)
+            self._emit(search)
             return
         call.status = "queued"
-        self._emit(errand)
+        self._emit(search)
         deadline = time.monotonic() + self.s.call_timeout_s
         interval = self.s.poll_interval_s if self.live else self.s.sim_poll_s
         while time.monotonic() < deadline:
@@ -165,120 +182,77 @@ class Orchestrator:
                 continue
             changed = st.status != call.status or st.transcript != call.transcript
             call.status, call.transcript = st.status, st.transcript
-            if st.status in TERMINAL_STATUSES:
+            if st.status in TERMINAL_STATUSES or st.status == "voicemail":
                 call.cost_cents, call.duration_s = st.cost_cents, st.duration_s
                 call.recording_url, call.error = st.recording_url, st.error
-                if st.extracted:
-                    call.price = parse_price(st.transcript, st.extracted)
-                    call.slot = parse_slot(st.transcript, st.extracted)
-                self._emit(errand)
+                self._emit(search)
                 return
             if changed:
-                self._emit(errand)
+                self._emit(search)
         call.status, call.error = "timeout", "No final status before timeout"
-        self._emit(errand)
+        self._emit(search)
 
-    def _user_data(self, errand: Errand, vendor: Vendor, **extra) -> dict:
-        req = errand.request
-        return {
-            "business_name": vendor.name,
-            "task": req.task,
-            "area": req.area,
-            "time_window": req.time_window,
-            "budget": str(req.budget),
-            "customer_name": self.s.customer_name,
-            "language": req.language,
-            "mode": "quote",
-            **extra,
-        }
+    # ------------------------------------------------------------------ finish
+    async def _finish(self, search: Search) -> None:
+        req = search.request
+        search.status = "deciding"
+        self._emit(search)
+        ranked = rank(search.calls)
+        unconfirmed = [c for c in search.calls if c.availability == "unconfirmed"]
+        search.warnings = ["Availability can change. Confirm at the blood bank counter on arrival."]
 
-    # ------------------------------------------------------------ pick/book
-    async def _pick(self, errand: Errand, viable: list[CallRecord]) -> None:
-        req = errand.request
-        errand.status = "deciding"
-        self._emit(errand)
-        shortlist = viable[:5]
-        answers = await self._decide(errand, "final", final_state(req, shortlist), final_questions(req, shortlist))
-        picked, conf = choice(answers, "best_vendor")
-        chosen = next((c for c in shortlist if c.id == picked), shortlist[0])
-        errand.chosen_call_id = chosen.id
-        errand.choice_confidence = round(conf, 3)
-        errand.auto_book_probability = round(noul(answers, "safe_to_auto_book"), 3)
-        errand.reason = explain(chosen, errand.calls, req.priority)
-
-        auto = (
-            req.auto_book_limit > 0
-            and chosen.price is not None
-            and chosen.price <= req.auto_book_limit
-            and conf >= self.s.auto_book_confidence
-            and errand.auto_book_probability >= self.s.auto_book_confidence
-        )
-        if auto:
-            errand.note(f"Auto-booking {chosen.vendor.name} (confidence {conf:.2f})")
-            await self._book(errand, chosen)
-        else:
-            errand.status = "awaiting_approval"
-            errand.note(f"Recommending {chosen.vendor.name} (confidence {conf:.2f}); waiting for approval")
-            self._emit(errand)
-
-    async def approve(self, errand_id: str, call_id: str | None = None) -> Errand:
-        errand = self.store.get(errand_id)
-        if errand is None or errand.status != "awaiting_approval":
-            raise ValueError("errand is not waiting for approval")
-        target = errand.call(call_id or errand.chosen_call_id)
-        if not target.viable:
-            raise ValueError("that business did not give a usable quote")
-        errand.chosen_call_id = target.id
-        asyncio.create_task(self._book(errand, target))
-        return errand
-
-    async def _book(self, errand: Errand, chosen: CallRecord) -> None:
-        errand.status = "booking"
-        self._emit(errand)
-        if self.live and not self.s.booking_call:
-            errand.status = "booked"
-            errand.note(f"Marked {chosen.vendor.name} as booked (BOOKING_CALL is off, no call placed)")
-            self._emit(errand)
+        if not ranked:
+            search.status = "failed"
+            if unconfirmed:
+                names = ", ".join(f"{c.facility.name} ({c.phone.number})" for c in unconfirmed)
+                search.reason = f"No blood bank clearly confirmed {req.blood_group}. Possible leads, call to verify: {names}."
+            else:
+                search.reason = (
+                    f"No blood bank confirmed {req.blood_group} {COMPONENTS[req.component]}. "
+                    "Ask the hospital to contact donor groups or the state blood transfusion council."
+                )
+            search.note("No confirmed availability")
+            self._emit(search)
             return
-        call = CallRecord(vendor=chosen.vendor, purpose="book", price=chosen.price, slot=chosen.slot)
-        errand.calls.append(call)
-        await self._place_and_track(
-            errand, call,
-            self._user_data(errand, chosen.vendor, mode="book", price=str(chosen.price), slot=chosen.slot or ""),
-        )
-        errand.status = "booked" if call.status == "completed" else "failed"
-        errand.note(
-            f"Booked {chosen.vendor.name}" if errand.status == "booked"
-            else f"Booking call ended with {call.status}"
-        )
-        self._emit(errand)
+
+        shortlist = ranked[:5]
+        answers, backend = await self._decide(search, "final", final_state(req, shortlist), final_questions(req, shortlist))
+        picked, conf = choice(answers, "best_facility")
+        chosen = next((c for c in shortlist if c.id == picked), shortlist[0])
+        search.chosen_call_id, search.choice_confidence = chosen.id, round(conf, 3)
+        search.plan = plan_units(ranked, chosen, req.units)
+        search.reason = explain(chosen, search)
+        if units_covered(search.plan) < req.units:
+            search.warnings.append(
+                f"Only {units_covered(search.plan)} of {req.units} unit(s) confirmed. Keep searching or ask donor groups."
+            )
+        if len(search.plan) > 1:
+            search.warnings.append("Units are split across blood banks; send two people if possible.")
+        if chosen.signals.get("replacement_donor_required", 0) >= 0.5:
+            search.warnings.append(f"{chosen.facility.name} needs a replacement donor. Bring one along.")
+        if unconfirmed:
+            search.warnings.append(
+                "Unconfirmed leads (call to verify): " + ", ".join(c.facility.name for c in unconfirmed)
+            )
+        search.status = "done"
+        search.note(f"Recommend {chosen.facility.name} (confidence {conf:.2f})")
+        self._emit(search)
 
 
-def explain(chosen: CallRecord, calls: list[CallRecord], priority: str) -> str:
-    """Plain-language reason shown to the user."""
-    quotes = [c for c in calls if c.purpose == "quote"]
-    viable = [c for c in quotes if c.viable]
-    parts = [f"{chosen.vendor.name}: Rs {chosen.price}"]
-    if chosen.slot:
-        parts.append(chosen.slot)
-    parts.append(f"rated {chosen.vendor.rating}")
-    if chosen.signals.get("hidden_charges", 1) < 0.5:
-        parts.append("no extra charges")
-    head = ", ".join(parts) + "."
-    beat = len(viable) - 1
-    lines = [head, f"Best for '{priority}' among {len(viable)} usable quotes from {len(quotes)} calls." if beat else ""]
-    skipped = []
-    for c in quotes:
-        if c is chosen:
-            continue
-        if c.signals.get("hidden_charges", 0) >= 0.5:
-            skipped.append(f"{c.vendor.name} (hidden charges)")
-        elif c.outcome == "no_slot" or (c.viable and c.signals.get("slot_fits", 1) < 0.5):
-            skipped.append(f"{c.vendor.name} (no slot in time)")
-        elif c.viable and c.signals.get("within_budget", 1) < 0.5:
-            skipped.append(f"{c.vendor.name} (over budget)")
-        elif c.viable and c.signals.get("reliability", 1) < 0.45:
-            skipped.append(f"{c.vendor.name} (vague answers)")
-    if skipped:
-        lines.append("Passed on " + "; ".join(skipped) + ".")
-    return " ".join(x for x in lines if x)
+def explain(chosen: CallRecord, search: Search) -> str:
+    req = search.request
+    when = time.strftime("%H:%M", time.localtime(chosen.confirmed_at or time.time()))
+    who = f" by {chosen.staff}" if chosen.staff else ""
+    parts = [
+        f"{chosen.facility.name} confirmed {req.blood_group} {COMPONENTS[req.component]}"
+        f"{f', {chosen.units} unit(s)' if chosen.units else ''} at {when}{who}.",
+        f"About {chosen.eta_min} min away.",
+    ]
+    if chosen.signals.get("will_hold", 0) >= 0.5:
+        parts.append("They agreed to keep it aside.")
+    if chosen.fee:
+        parts.append(f"Processing fee about Rs {chosen.fee} per unit.")
+    others = [c for c in search.calls if c is not chosen and c.availability in ("not_available", "closed", "unconfirmed")]
+    if others:
+        parts.append("Ruled out: " + "; ".join(f"{c.facility.name} ({c.availability.replace('_', ' ')})" for c in others) + ".")
+    return " ".join(parts)

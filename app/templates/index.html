@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Phonewala</title>
+  <title>BloodBankCall</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <header class="top">
   <div class="brand">
-    <span class="logo">☎</span>
+    <span class="logo">🩸</span>
     <div>
-      <h1>Phonewala</h1>
-      <p class="tag">The LLM talks. The decision model decides.</p>
+      <h1>BloodBankCall</h1>
+      <p class="tag">Calls every blood bank at once. Tells you only what was confirmed.</p>
     </div>
   </div>
   <div class="badges">
@@ -23,48 +23,49 @@
 
 <main class="layout">
   <section class="panel form-panel">
-    <h2>What do you need?</h2>
-    <form id="errand-form">
-      <label>Task
-        <textarea name="task" rows="3" required>AC service tomorrow, cooling is weak</textarea>
-      </label>
-      <div class="row">
-        <label>Area <input name="area" value="HSR Layout, Bengaluru"></label>
-        <label>When <input name="time_window" value="tomorrow evening"></label>
-      </div>
-      <div class="row">
-        <label>Budget (Rs) <input name="budget" type="number" min="1" value="800"></label>
-        <label>Auto-book under (Rs) <input name="auto_book_limit" type="number" min="0" value="0"></label>
-      </div>
-      <fieldset class="seg">
-        <legend>Priority</legend>
-        <label><input type="radio" name="priority" value="cheapest" checked> Cheapest</label>
-        <label><input type="radio" name="priority" value="fastest"> Fastest</label>
-        <label><input type="radio" name="priority" value="reliable"> Most reliable</label>
+    <h2>Who needs blood?</h2>
+    <form id="search-form">
+      <fieldset class="groups">
+        <legend>Blood group</legend>
+        {% for g in groups %}
+        <label class="chip"><input type="radio" name="blood_group" value="{{ g }}" {{ 'checked' if g == 'O-' else '' }}><span>{{ g }}</span></label>
+        {% endfor %}
       </fieldset>
-      <label>Language <input name="language" value="Hindi or English"></label>
-      <button type="submit" id="go">Start calling</button>
-      <p class="hint">Try: “need a plumber, kitchen tap leaking”, “PG near Koramangala under 12000”, “packers and movers on Sunday”.</p>
+      <div class="row">
+        <label>Component
+          <select name="component">
+            {% for key, label in components.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>Units <input name="units" type="number" min="1" max="10" value="2"></label>
+      </div>
+      <div class="row">
+        <label>Patient area
+          <select name="area">{% for a in areas %}<option>{{ a }}</option>{% endfor %}</select>
+        </label>
+        <label>Hospital (optional) <input name="hospital" placeholder="e.g. City Hospital"></label>
+      </div>
+      <label>Language <input name="language" value="English or Hindi"></label>
+      <button type="submit" id="go">Find blood now</button>
+      <p class="hint">No patient name is ever shared on calls. Results are confirmed by phone, but always confirm at the counter.</p>
     </form>
   </section>
 
   <section class="work">
     <ol class="steps" id="steps">
-      <li data-step="planning">Understand</li>
-      <li data-step="calling">Call in parallel</li>
-      <li data-step="deciding">Decide</li>
-      <li data-step="awaiting_approval">Approve</li>
-      <li data-step="booked">Booked</li>
+      <li data-step="calling">Calling blood banks</li>
+      <li data-step="deciding">Verifying answers</li>
+      <li data-step="done">Where to go</li>
     </ol>
 
-    <div id="empty" class="empty">Describe an errand and Phonewala will phone local businesses for you.</div>
+    <div id="empty" class="empty">Pick a blood group and press <b>Find blood now</b>. Every blood bank is called in parallel; only answers that pass the safety check are shown as available.</div>
 
     <div id="verdict" class="panel verdict hidden"></div>
     <div id="calls" class="calls"></div>
 
     <div class="two">
       <section class="panel">
-        <h3>Comparison</h3>
+        <h3>All blood banks</h3>
         <div class="table-wrap"><table id="compare"></table></div>
       </section>
       <section class="panel">
