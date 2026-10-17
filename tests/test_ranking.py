@@ -2,15 +2,18 @@ from app.ranking import gate, plan_units, rank
 from app.schemas import BloodRequest, CallRecord, Facility, Phone
 
 REQ = BloodRequest(blood_group="O-", units=2)
-GOOD_TRANSCRIPT = (
-    "assistant: Do you have O negative, that is O minus?\n"
-    "user: yes O negative is there, 3 units\n"
-    "assistant: Confirming: O negative, that is O minus, 3 units, correct?\n"
-    "user: yes correct"
-)
+def good_transcript(units=3):
+    return (
+        "assistant: Do you have O negative, that is O minus?\n"
+        f"user: yes O negative is there, {units} units\n"
+        f"assistant: Confirming: O negative, that is O minus, {units} units, correct?\n"
+        "user: yes correct"
+    )
 
 
-def call(name="Bank", eta=10, units=3, transcript=GOOD_TRANSCRIPT, heard=("O-",), **signals):
+def call(name="Bank", eta=10, units=3, transcript=None, heard=("O-",), **signals):
+    # Transcript reads back the same unit count the record holds; the gate now checks they agree.
+    transcript = good_transcript(units) if transcript is None else transcript
     base = {"has_requested": 0.97, "confirmed_readback": 0.95, "mentioned_other_group": 0.05, "enough_units": 0.9,
             "replacement_donor_required": 0.1, "will_hold": 0.8, "open_now": 0.95}
     base.update(signals)
