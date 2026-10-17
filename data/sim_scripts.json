@@ -101,6 +101,29 @@
       "assistant: Okay, thank you."
     ]
   },
+  "hinglish_flip": {
+    "lines": [
+      "assistant: Namaste, I'm an AI assistant calling for a patient's family; this call may be recorded. Is this the blood bank at {facility_name}?",
+      "user: Haan ji, boliye.",
+      "assistant: Do you have {blood_group_spoken}, that is {blood_group_confirm}, {component} available right now? We need {units} units.",
+      "user: {blood_group_spoken} nahi hai, positive hai. {stock} unit.",
+      "assistant: Confirming: {blood_group_spoken}, that is {blood_group_confirm}, {stock} units of {component}, correct?",
+      "user: Haan.",
+      "assistant: Thank you."
+    ]
+  },
+  "retracted": {
+    "lines": [
+      "assistant: Namaste, I'm an AI assistant calling for a patient's family; this call may be recorded. Is this the blood bank at {facility_name}?",
+      "user: Yes, blood bank.",
+      "assistant: Do you have {blood_group_spoken}, that is {blood_group_confirm}, {component} available right now? We need {units} units.",
+      "user: Yes, {blood_group_spoken} is there, {stock} units.",
+      "assistant: Confirming: {blood_group_spoken}, that is {blood_group_confirm}, {stock} units of {component}, correct?",
+      "user: Yes.",
+      "assistant: Thank you. The family will bring the doctor's requisition form and the patient's sample.",
+      "user: Wait, sorry, those units were just issued to another patient. It is finished."
+    ]
+  },
   "no_answer": {"lines": [], "final": "no-answer", "ring_s": 7},
   "busy": {"lines": [], "final": "busy"},
   "voicemail": {"lines": [], "final": "voicemail", "ring_s": 5}

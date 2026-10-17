@@ -10,15 +10,40 @@ import math
 import re
 from typing import Any
 
-from ..parsing import parse_groups, readback_confirmed, said_unavailable, vendor_groups
+from ..parsing import denies, parse_groups, readback_confirmed, said_unavailable, vendor_ambiguous, vendor_groups
 from .base import Answers, Questions
 
-CLOSED = re.compile(r"closed|opens at|band hai|after 9|tomorrow morning|not open", re.I)
-REPLACEMENT = re.compile(r"replacement|donor", re.I)
+CLOSED = re.compile(
+    r"(?<!never )(?<!not )closed|opens (at|only|tomorrow)|\bbandh? hai\b|after 9|tomorrow morning|not open|after hours"
+    r"|\bshut\b|timing (is )?over|(come|collect|aana|aaiye|aao)\b.{0,25}\b(tomorrow|morning|kal|subah)\b"
+    r"|\b(tomorrow|kal|subah)\b.{0,20}\b(come|collect|aana|aaiye|aao)\b",
+    re.I,
+)
+REPLACEMENT = re.compile(r"replac|donor|donate|exchange|badle mein", re.I)
+NO_REPLACEMENT = re.compile(
+    r"no (replacement|donor|exchange)( is)? (needed|required)|(replacement|donor|exchange)( is)? not (needed|required)"
+    r"|no need (of|for) (a )?(replacement|donor)|without (a )?(replacement|donor)|not required|zaroorat nahi",
+    re.I,
+)
+REFUSE = re.compile(r"\b(no|not|can'?t|cannot|won'?t|unable|nahi|nahin|illa)\b", re.I)
+CLAUSE = re.compile(r"[\n.,;!?]|\b(?:but|lekin|par|however|actually|wait)\b", re.I)
 HOLD = re.compile(r"keep (it|them)? ?aside|hold|rakh|reserve", re.I)
 CALLBACK = re.compile(r"call (back )?later|busy right now|baad mein", re.I)
 WRONG_DEPT = re.compile(r"wrong number|this is (the )?pharmacy|not the blood bank|we don'?t have a blood bank", re.I)
 AFFIRM = re.compile(r"\b(yes|yeah|haan|ha|ji|ok|okay|sure|can)\b", re.I)
+
+
+def _stock_said(vendor: str, group: str) -> bool | None:
+    """Clause by clause, the staff's latest word on the requested group: True (have it), False
+    (denied it, or a later 'sorry, finished'), None (never said)."""
+    state = None
+    for clause in CLAUSE.split(vendor):
+        groups = parse_groups(clause)
+        if group in groups:
+            state = not denies(clause)
+        elif not groups and state and said_unavailable(f"user: {clause}"):
+            state = False
+    return state
 
 
 def _vendor(transcript: str) -> str:
@@ -59,12 +84,17 @@ class MockEngine:
     def _q_has_requested(self, state: dict) -> dict:
         t, v, group, _, _ = self._ctx(state)
         heard = vendor_groups(t)
-        if not v.strip() or said_unavailable(t) and group not in heard[-1:]:
+        stock = _stock_said(v, group)
+        if not v.strip() or stock is False:
             return _noul(0.04)
-        if group in heard or readback_confirmed(t, group):
+        if stock:
             return _noul(0.95)
         if heard:  # only other groups named
             return _noul(0.08)
+        if said_unavailable(t):
+            return _noul(0.04)
+        if readback_confirmed(t, group):
+            return _noul(0.95)
         return _noul(0.55 if AFFIRM.search(v) else 0.2)
 
     def _q_confirmed_readback(self, state: dict) -> dict:
@@ -75,8 +105,7 @@ class MockEngine:
     def _q_mentioned_other_group(self, state: dict) -> dict:
         t, v, group, _, _ = self._ctx(state)
         others = [g for g in vendor_groups(t) if g != group]
-        bare = re.search(r"\b(have|hai|available)\s+(o|a|b|ab)\b(?!\s*(positive|negative|plus|minus|\+|-))", v, re.I)
-        return _noul(0.85 if others or bare else 0.06)
+        return _noul(0.85 if others or vendor_ambiguous(t, group) else 0.06)
 
     def _q_enough_units(self, state: dict) -> dict:
         _, _, _, need, said = self._ctx(state)
@@ -86,8 +115,7 @@ class MockEngine:
 
     def _q_replacement_donor_required(self, state: dict) -> dict:
         v = self._ctx(state)[1]
-        no_need = re.search(r"no (replacement|donor) (needed|required)|without (a )?donor|not required", v, re.I)
-        return _noul(0.08 if no_need or not REPLACEMENT.search(v) else 0.88)
+        return _noul(0.08 if NO_REPLACEMENT.search(v) or not REPLACEMENT.search(v) else 0.88)
 
     def _q_will_hold(self, state: dict) -> dict:
         t = state["transcript"]
@@ -95,7 +123,7 @@ class MockEngine:
         for i, ln in enumerate(lines):
             if ln.lower().startswith("assistant:") and HOLD.search(ln):
                 reply = next((r for r in lines[i + 1:] if r.lower().startswith("user:")), "")
-                if re.search(r"\b(no|can'?t|cannot|nahi)\b", reply, re.I):
+                if REFUSE.search(reply):  # checked before AFFIRM: "we can not hold" contains "can"
                     return _noul(0.08)
                 if AFFIRM.search(reply):
                     return _noul(0.85)
