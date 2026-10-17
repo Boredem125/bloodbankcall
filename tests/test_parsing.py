@@ -143,3 +143,49 @@ def test_readback_rejected():
 
 def test_no_readback():
     assert readback_confirmed("user: yes we have", "O-") is None
+
+
+# Third live call (2026-10-17), first one with the blood bank agent: STT tail noise in the yes,
+# lowercase staff name, partial stock.
+REAL_BLOOD_CALL = """assistant: Namaste, I am an AI assistant calling for a patient's family; this call may be recorded. Is this the blood bank?
+user:  yes
+assistant:  Do you have O negative, that is O minus, packed red cells (PRBC) available right now? We need 2 units.
+user:  yeah it's available
+assistant:  How many units do you have right now?
+user:  we have only one unit
+assistant:  Do you require a replacement donor, and what is the processing fee per unit?
+user:  yeah we do require the processing fee purchasing fee is like five hundred rupees
+assistant:  Can you keep the 1 unit aside for one hour if the family comes now?
+user:  yeah so
+assistant:  What is your name?
+user:  my name is arian
+assistant: Confirming: O negative, that is O minus, 1 unit of packed red cells (PRBC), kept aside for one hour, correct?
+user:  sure perfect  work
+assistant:  Thank you; the family will bring the doctor's requisition form and the patient's blood sample.
+user:  yeah
+assistant: Thank
+user:  thank you"""
+
+
+def test_real_blood_call_parses():
+    assert readback_confirmed(REAL_BLOOD_CALL, "O-") is True
+    assert parse_units(REAL_BLOOD_CALL) == 1
+    assert parse_fee(REAL_BLOOD_CALL) == 500
+    assert parse_staff(REAL_BLOOD_CALL) == "Arian"
+
+
+@pytest.mark.parametrize("reply", ["sure perfect work", "yes that works", "haan theek hai, thank you"])
+def test_noisy_yes_still_counts(reply):
+    t = f"assistant: Confirming: O negative, that is O minus, 2 units, correct?\nuser: {reply}"
+    assert readback_confirmed(t, "O-") is True
+
+
+@pytest.mark.parametrize("reply", ["this is wrong", "sure, no wait", "work it out, not sure", "yes but finished now"])
+def test_noisy_no_still_fails(reply):
+    t = f"assistant: Confirming: O negative, that is O minus, 2 units, correct?\nuser: {reply}"
+    assert readback_confirmed(t, "O-") is not True
+
+
+def test_lowercase_name_not_a_word():
+    assert parse_staff("user: this is the blood bank") is None
+    assert parse_staff("user: this is correct") is None
