@@ -1,90 +1,115 @@
-import asyncio
-
-from app.schemas import Errand, ErrandRequest
+from app.schemas import BloodRequest, Search
 
 
 async def run(orch, store, **req):
-    errand = store.add(Errand(request=ErrandRequest(task=req.pop("task", "AC service tomorrow, cooling is weak"), **req)))
-    await orch.run(errand.id)
-    return errand
+    search = store.add(Search(request=BloodRequest(**req)))
+    await orch.run(search.id)
+    return search
 
 
-async def test_ac_errand_recommends_honest_cheapest(orch, store):
-    e = await run(orch, store, budget=800)
-    assert e.category == "ac_repair"
-    assert e.status == "awaiting_approval"
-    chosen = e.call(e.chosen_call_id)
-    assert chosen.vendor.name == "CoolCare AC Services"
-    assert chosen.price == 650
-    # the hidden-fee and no-slot vendors were understood as such
-    by_name = {c.vendor.name: c for c in e.calls}
-    assert by_name["Sri Sai Cooling Works"].signals["hidden_charges"] > 0.5
-    assert by_name["Raju AC Repair"].outcome == "no_slot" and not by_name["Raju AC Repair"].viable
-    assert "Sri Sai Cooling Works (hidden charges)" in e.reason
-    stages = [d.stage for d in e.decisions]
-    assert stages[0] == "intake" and stages[-1] == "final" and stages.count("call") == 5
+def by_name(search):
+    return {c.facility.name: c for c in search.calls}
 
 
-async def test_approve_places_booking_call(orch, store):
-    e = await run(orch, store)
-    await orch.approve(e.id)
-    for _ in range(200):
-        if e.status in ("booked", "failed"):
-            break
-        await asyncio.sleep(0.02)
-    assert e.status == "booked"
-    assert e.calls[-1].purpose == "book" and "confirmed" in e.calls[-1].transcript.lower()
+async def test_recommends_nearest_confirmed_with_hold(orch, store):
+    s = await run(orch, store, blood_group="O-", units=2, area="HSR Layout")
+    assert s.status == "done"
+    chosen = s.call(s.chosen_call_id)
+    assert chosen.facility.name == "Sanjeevani 24x7 Blood Centre"
+    assert chosen.availability == "confirmed" and chosen.units == 4 and chosen.staff == "Ramesh"
+    assert [(p.facility, p.units) for p in s.plan] == [("Sanjeevani 24x7 Blood Centre", 2)]
+    assert any("Confirm at the blood bank counter" in w for w in s.warnings)
 
 
-async def test_auto_book_under_limit(orch, store):
-    e = await run(orch, store, auto_book_limit=700)
-    assert e.status == "booked"
-    assert any("Auto-booking" in line for line in e.log)
+async def test_misheard_group_is_never_confirmed(orch, store):
+    # "zero positive" when O negative was requested: the gate must not say available
+    s = await run(orch, store, blood_group="O-", units=2)
+    red_drop = by_name(s)["Jayanagar Red Drop Blood Centre"]
+    assert red_drop.availability != "confirmed"
+    assert "O+" in red_drop.groups_heard
 
 
-async def test_escalates_when_too_few_quotes(orch, store):
-    orch.s.initial_calls = 1  # first batch: Frosty (over budget but viable) -> needs one more
-    e = await run(orch, store)
-    assert len([c for c in e.calls if c.purpose == "quote"]) >= 2
-    assert any("calling" in line and "more" in line for line in e.log)
+async def test_ambiguous_answer_is_unconfirmed_with_reasons(orch, store):
+    s = await run(orch, store, blood_group="O-", units=2)
+    hope = by_name(s)["Whitefield Hope Blood Centre"]
+    assert hope.availability == "unconfirmed"
+    assert hope.gate_reasons
+    assert any("Whitefield Hope" in w for w in s.warnings)
 
 
-async def test_live_mode_caps_calls(orch, store, monkeypatch):
-    monkeypatch.setattr(orch.provider, "name", "bolna")  # pretend live: cap applies
-    orch.s.max_live_calls_per_errand = 3
-    orch.s.poll_interval_s = 0.02
-    e = await run(orch, store)
-    assert len(e.calls) == 3
+async def test_switchboard_fallback_reaches_blood_bank(orch, store):
+    s = await run(orch, store, blood_group="O-", units=2)
+    kc = [c for c in s.calls if c.facility.id == "kc_hospital"]
+    assert [c.phone.label for c in kc] == ["blood bank", "switchboard"]
+    assert kc[0].availability == "unknown" and kc[1].availability == "confirmed"
 
 
-async def test_live_calls_respect_account_concurrency(settings, store):
-    from app.decision import build_engine
-    from app.orchestrator import Orchestrator
-    from app.providers import SimProvider
-    from app.vendors import load_vendors
+async def test_split_plan_when_no_single_bank_has_enough(orch, store):
+    orch.facilities = [f for f in orch.facilities if f.id in {"seva", "kc_hospital", "unity"}]
+    s = await run(orch, store, blood_group="O-", units=3)
+    assert s.status == "done"
+    assert sum(p.units for p in s.plan) == 3
+    assert len(s.plan) == 2
+    assert any("split" in w for w in s.warnings)
 
-    settings.live_concurrency = 2
-    settings.poll_interval_s = 0.02
-    provider = SimProvider(settings)
-    provider.name = "bolna"  # pretend live
-    orch = Orchestrator(settings, provider, build_engine(settings), store, load_vendors(settings.vendors_file))
-    errand = store.add(Errand(request=ErrandRequest(task="AC service tomorrow")))
-    peak = 0
-    real_start = provider.start
 
-    async def counting_start(vendor, user_data):
+async def test_nothing_confirmed_fails_with_leads(orch, store):
+    orch.facilities = [f for f in orch.facilities if f.id in {"hope", "unity", "lifeline"}]
+    s = await run(orch, store, blood_group="O-", units=2)
+    assert s.status == "failed"
+    assert "Whitefield Hope" in s.reason and "+910000000107" in s.reason
+
+
+async def test_live_mock_answers_are_not_trusted(orch, store, monkeypatch):
+    monkeypatch.setattr(orch.provider, "name", "bolna")  # pretend live with the mock decision engine
+    s = await run(orch, store, blood_group="O-", units=2)
+    assert all(c.availability != "confirmed" for c in s.calls)
+    assert s.status == "failed"
+
+
+async def test_live_mode_caps_paid_calls(orch, store, monkeypatch):
+    monkeypatch.setattr(orch.provider, "name", "bolna")
+    orch.s.max_live_calls_per_search = 3
+    s = await run(orch, store, blood_group="O-", units=2)
+    assert len(s.calls) == 3
+
+
+async def test_live_calls_respect_account_concurrency(orch, store, monkeypatch):
+    monkeypatch.setattr(orch.provider, "name", "bolna")
+    orch.s.max_live_calls_per_search = 6
+    peak, search_ref = 0, {}
+    real_start = orch.provider.start
+
+    async def counting_start(facility, phone, user_data):
         nonlocal peak
-        active = [c for c in errand.calls if c.status in ("queued", "ringing", "in-progress")]
+        active = [c for c in search_ref["s"].calls if c.status in ("queued", "ringing", "in-progress")]
         peak = max(peak, len(active) + 1)
-        return await real_start(vendor, user_data)
+        return await real_start(facility, phone, user_data)
 
-    provider.start = counting_start
-    await orch.run(errand.id)
-    assert len(errand.calls) == 3
-    assert peak <= 2
+    monkeypatch.setattr(orch.provider, "start", counting_start)
+    search = store.add(Search(request=BloodRequest()))
+    search_ref["s"] = search
+    await orch.run(search.id)
+    assert peak <= orch.s.live_concurrency
 
 
-async def test_unknown_category_fails_cleanly(orch, store):
-    orch.vendors = []
-    e = await run(orch, store)
-    assert e.status == "failed" and "No businesses" in e.reason
+async def test_closed_and_voicemail_are_not_answers(orch, store):
+    orch.facilities = [f for f in orch.facilities if f.id in {"lifeline", "voicebox", "sanjeevani"}]
+    s = await run(orch, store, blood_group="O-", units=2)
+    names = by_name(s)
+    assert names["BTM Lifeline Blood Bank"].availability == "closed"
+    assert names["Koramangala Community Blood Bank"].availability == "unknown"
+
+
+async def test_no_patient_name_in_call_data(orch, store):
+    sent = []
+    real_start = orch.provider.start
+
+    async def spy(facility, phone, user_data):
+        sent.append(user_data)
+        return await real_start(facility, phone, user_data)
+
+    orch.provider.start = spy
+    await run(orch, store, blood_group="B+", units=1, hospital="City Hospital")
+    assert sent and all("patient" not in k for d in sent for k in d)
+    assert sent[0]["blood_group_spoken"] == "B positive" and sent[0]["blood_group_confirm"] == "B plus"

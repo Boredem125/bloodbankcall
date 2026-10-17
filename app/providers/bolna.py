@@ -6,7 +6,7 @@ from typing import Any
 import httpx
 
 from ..config import Settings
-from ..schemas import Vendor
+from ..schemas import Facility, Phone
 from .base import CallStatus
 
 
@@ -26,8 +26,11 @@ def _flatten(d: Any, prefix: str = "") -> dict[str, Any]:
 
 def normalize_execution(data: dict[str, Any]) -> CallStatus:
     tel = data.get("telephony_data") or {}
+    status = data.get("status") or "unknown"
+    if status == "completed" and data.get("answered_by_voice_mail"):
+        status = "voicemail"  # a machine answered: we learned nothing about stock
     return CallStatus(
-        status=data.get("status") or "unknown",
+        status=status,
         transcript=data.get("transcript") or "",
         cost_cents=float(data.get("total_cost") or 0),
         duration_s=float(data.get("conversation_duration") or 0),
@@ -50,10 +53,10 @@ class BolnaProvider:
         # Filled by /webhooks/bolna when a tunnel is configured; saves polling calls.
         self.webhook_cache: dict[str, dict[str, Any]] = {}
 
-    async def start(self, vendor: Vendor, user_data: dict[str, Any]) -> str:
+    async def start(self, facility: Facility, phone: Phone, user_data: dict[str, Any]) -> str:
         body: dict[str, Any] = {
             "agent_id": self.s.bolna_agent_id,
-            "recipient_phone_number": vendor.phone,
+            "recipient_phone_number": phone.number,
             "user_data": user_data,
         }
         if self.s.bolna_from_number:

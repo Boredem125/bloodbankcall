@@ -1,4 +1,4 @@
-"""Create the Phonewala "Vendor caller" agent on Bolna and print its agent_id.
+"""Create the BloodBankCall caller agent on Bolna and print its agent_id.
 
 Usage:  .venv\\Scripts\\python.exe scripts\\create_agent.py [--webhook https://<tunnel>/webhooks/bolna]
 
@@ -17,13 +17,13 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.config import get_settings  # noqa: E402
 
-PROMPT = (Path(__file__).resolve().parent.parent / "agent" / "vendor_caller_prompt.md").read_text(encoding="utf-8")
+PROMPT = (Path(__file__).resolve().parent.parent / "agent" / "blood_bank_caller_prompt.md").read_text(encoding="utf-8")
 
 
 def agent_body(webhook: str | None) -> dict:
     config = {
-        "agent_name": "Phonewala vendor caller",
-        "agent_welcome_message": "Namaste! Am I speaking with {{business_name}}?",
+        "agent_name": "BloodBankCall caller",
+        "agent_welcome_message": "Namaste, I am an AI assistant calling for a patient's family; this call may be recorded. Is this the blood bank?",
         "tasks": [{
             "task_type": "conversation",
             "toolchain": {"execution": "sequential", "pipelines": [["transcriber", "llm", "synthesizer"]]},
@@ -45,8 +45,8 @@ def agent_body(webhook: str | None) -> dict:
                 "input": {"provider": "plivo", "format": "wav"},
                 "output": {"provider": "plivo", "format": "wav"},
             },
-            # Hard cost cap: hang up after 90 s, or 10 s of silence.
-            "task_config": {"call_terminate": 90, "hangup_after_silence": 10},
+            # Hard cost cap: hang up after 150 s (switchboard transfers take time), or 15 s of silence.
+            "task_config": {"call_terminate": 150, "hangup_after_silence": 15},
         }],
     }
     if webhook:
@@ -68,7 +68,10 @@ def main() -> None:
         r = httpx.patch(
             f"{s.bolna_base_url}/v2/agent/{s.bolna_agent_id}",
             headers={"Authorization": f"Bearer {s.bolna_api_key}"},
-            json={"agent_prompts": {"task_1": {"system_prompt": PROMPT}}},
+            json={
+                "agent_config": {"agent_welcome_message": agent_body(None)["agent_config"]["agent_welcome_message"]},
+                "agent_prompts": {"task_1": {"system_prompt": PROMPT}},
+            },
             timeout=30,
         )
         if r.status_code >= 400:

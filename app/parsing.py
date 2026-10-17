@@ -22,7 +22,7 @@ _MULT = {"hundred": 100, "sau": 100, "thousand": 1000, "hazaar": 1000, "hazar": 
 _WORD = re.compile(r"[A-Za-z]+|[^A-Za-z]+")
 # Hindi number words that are also everyday words ("do it", "saath mein", "ek din").
 _AMBIGUOUS = {"do", "ek", "saath", "teen", "char", "das"}
-_CURRENCY = {"rupees", "rupee", "rupaye", "rupay", "rs", "inr"}
+_CURRENCY = {"rupees", "rupee", "rupaye", "rupay", "rs", "inr", "unit", "units", "bag", "bags"}
 
 
 def _number_follows(toks: list[str], n: int) -> bool:
@@ -156,6 +156,88 @@ def parse_price(transcript: str, extracted: dict[str, Any] | None = None) -> int
         return later[-1] if later else amount
     found = [a for _, ln in vendor for a in _amounts(ln)]
     return found[-1] if found else None
+
+
+# ---------------------------------------------------------------- blood bank calls
+# STT often hears "O" as "oh" or "zero" (which words_to_digits turns into 0).
+_GROUP = re.compile(
+    r"(?<![\w])(ab|a|b|o|oh|0)\s*-?\s*(positive|negative|pos\b|neg\b|plus|minus|\+ve|-ve|\+|-)",
+    re.I,
+)
+_UNIT_COUNT = re.compile(r"(?<!\d)(\d{1,2})\s*(?:units?|bags?|bottles?|pints?)\b", re.I)
+_STAFF = re.compile(r"\b(?i:this is|my name is|i am|i'm|name is|main)\s+([A-Z][a-z]{2,15})\b")
+_NOT_NAMES = {"Sorry", "Calling", "From", "Speaking", "Not", "The", "Blood", "Here", "Busy", "Checking"}
+_AFFIRM = re.compile(r"^\s*(yes|yeah|yep|haan|ha|han|ji|correct|right|sahi|ok|okay|confirmed|exactly)\b", re.I)
+_NEGATE = re.compile(r"\b(no|not|nahi|nahin|wrong|galat)\b", re.I)
+_UNAVAILABLE = re.compile(
+    r"not available|no stock|out of stock|don'?t have|do not have|nahi hai|khatam|not there|finished|none left",
+    re.I,
+)
+
+
+def normalize_group(letter: str, sign: str) -> str:
+    letter = "O" if letter.lower() in {"o", "oh", "0"} else letter.upper()
+    neg = sign.lower() in {"negative", "neg", "minus", "-ve", "-"}
+    return letter + ("-" if neg else "+")
+
+
+def parse_groups(text: str) -> list[str]:
+    """Blood groups mentioned, normalised: 'O negative', 'zero minus', 'B +ve' -> 'O-', 'O-', 'B+'."""
+    return [normalize_group(m.group(1), m.group(2)) for m in _GROUP.finditer(words_to_digits(text))]
+
+
+def vendor_groups(transcript: str) -> list[str]:
+    return [g for _, ln in _lines(transcript, "user") for g in parse_groups(ln)]
+
+
+def parse_units(transcript: str) -> int | None:
+    """Units available: last count the facility said, else the agent's read-back
+    ("Confirming: ... 3 units"). Never the agent's own "we need N units"."""
+    found = [int(m.group(1)) for _, ln in _lines(transcript, "user") for m in _UNIT_COUNT.finditer(ln)]
+    if not found:
+        found = [
+            int(m.group(1))
+            for _, ln in _lines(transcript, "assistant")
+            if re.search(r"\bconfirm", ln, re.I)
+            for m in _UNIT_COUNT.finditer(ln)
+        ]
+    return found[-1] if found else None
+
+
+def parse_fee(transcript: str) -> int | None:
+    """Processing fee per unit (rupees) as stated by the facility."""
+    found = [a for _, ln in _lines(transcript, "user") for a in _amounts(ln) if a >= 100]
+    return found[-1] if found else None
+
+
+def parse_staff(transcript: str) -> str | None:
+    for raw in (ln.split(":", 1)[1] for ln in transcript.splitlines() if ln.lower().startswith("user:")):
+        for m in _STAFF.finditer(raw):
+            if m.group(1) not in _NOT_NAMES:
+                return m.group(1)
+    return None
+
+
+def said_unavailable(transcript: str) -> bool:
+    return any(_UNAVAILABLE.search(ln) for _, ln in _lines(transcript, "user"))
+
+
+def readback_confirmed(transcript: str, group: str) -> bool | None:
+    """Did the facility say yes right after the agent read back the requested group?
+    None = no read-back happened."""
+    lines = transcript.splitlines()
+    last_rb = None
+    for i, ln in enumerate(lines):
+        # only an explicit read-back counts, not the agent's opening question ("Do you have O negative?")
+        if ln.lower().startswith("assistant:") and re.search(r"\bconfirm", ln, re.I) and group in parse_groups(ln):
+            last_rb = i
+    if last_rb is None:
+        return None
+    for ln in lines[last_rb + 1:]:
+        if ln.lower().startswith("user:"):
+            reply = re.sub(r"no (problem|issue|worries)", "", ln.split(":", 1)[1], flags=re.I)
+            return bool(_AFFIRM.search(reply)) and not _NEGATE.search(reply)
+    return None
 
 
 def parse_slot(transcript: str, extracted: dict[str, Any] | None = None) -> str | None:

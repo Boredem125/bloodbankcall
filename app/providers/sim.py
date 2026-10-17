@@ -1,8 +1,9 @@
 """Zero-cost call simulator. Replays persona scripts with realistic timing.
 
-Each vendor in data/vendors.json carries a `sim` block: persona, price, slot, extra,
-ring_s, talk_s. Transcript lines appear progressively while the call is "in progress",
-so the dashboard looks exactly like it will with live Bolna calls.
+A facility's `sim` block sets a persona per phone number (`personas`, in the same
+order as `phones`) or one `persona` for all, plus script values (units, fee, staff...).
+Transcript lines appear progressively while the call is "in progress", exactly like
+live Bolna calls on the dashboard.
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..config import Settings
-from ..schemas import Vendor
+from ..schemas import Facility, Phone
 from .base import CallStatus
 
 
@@ -28,7 +29,7 @@ class _SimCall:
     lines: list[str]
     ring_s: float
     talk_s: float
-    final: str  # completed | no-answer | busy
+    final: str  # completed | no-answer | busy | voicemail
 
 
 class SimProvider:
@@ -40,18 +41,22 @@ class SimProvider:
         self.clock = clock
         self.calls: dict[str, _SimCall] = {}
 
-    async def start(self, vendor: Vendor, user_data: dict[str, Any]) -> str:
-        sim = {"persona": "good_value", "price": 700, "slot": "6 pm", "extra": "", "ring_s": 3, "talk_s": 14}
-        sim.update(vendor.sim)
-        persona = sim["persona"] if user_data.get("mode") != "book" else "booking"
-        script = self.scripts[persona]
-        fill = _Blank({**sim, **user_data, "business": vendor.name})
+    def persona(self, facility: Facility, phone: Phone) -> str:
+        sim = facility.sim
+        idx = next((i for i, p in enumerate(facility.phones) if p.number == phone.number), 0)
+        personas = sim.get("personas") or [sim.get("persona", "has_stock")]
+        return personas[min(idx, len(personas) - 1)]
+
+    async def start(self, facility: Facility, phone: Phone, user_data: dict[str, Any]) -> str:
+        sim = {"units": 3, "fee": 1550, "staff": "Ramesh", "ring_s": 3, "talk_s": 18, **facility.sim}
+        script = self.scripts[self.persona(facility, phone)]
+        fill = _Blank({**sim, **user_data})
         lines = [ln.format_map(fill) for ln in script.get("lines", [])]
         exec_id = f"sim-{uuid.uuid4().hex[:12]}"
         self.calls[exec_id] = _SimCall(
             started=self.clock(),
             lines=lines,
-            ring_s=float(sim["ring_s"]),
+            ring_s=float(script.get("ring_s", sim["ring_s"])),
             talk_s=float(sim["talk_s"]) if lines else 0.0,
             final=script.get("final", "completed"),
         )
@@ -70,9 +75,4 @@ class SimProvider:
         if talk_t < c.talk_s:
             shown = max(1, int(len(c.lines) * talk_t / c.talk_s))
             return CallStatus(status="in-progress", transcript="\n".join(c.lines[:shown]))
-        return CallStatus(
-            status="completed",
-            transcript="\n".join(c.lines),
-            duration_s=c.talk_s,
-            recording_url=None,
-        )
+        return CallStatus(status="completed", transcript="\n".join(c.lines), duration_s=c.talk_s)

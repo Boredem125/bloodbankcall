@@ -1,33 +1,38 @@
-# Phonewala
+# BloodBankCall
 
-**An AI that phones the offline world for you.** Say what you need ("AC service tomorrow in HSR, under ₹800"). Phonewala calls 5 local businesses in parallel in Hindi or English and gets quotes. It then decides which one to book and explains why.
+**At 2 a.m., a family needing O-negative blood calls blood bank after blood bank.** Lines go unanswered. Someone says "yes, O is there" and they drive across the city to hear "we meant O positive". BloodBankCall phones every nearby blood bank at once in English, Hindi or Kannada. It verifies each answer and tells the family where to go, but only when availability was actually confirmed.
 
-> The LLM talks. The decision model decides.
-
-The voice agent (Bolna) runs the conversations. Every judgement goes to a typed decision model instead of free text: **TypeSafe Jev**, with **Cloudflare Clef** as a drop-in fallback. Those judgements are things like "is there a hidden visiting fee?", "can they come in time?", "how committed did they sound?" and "which vendor should we book?". Each answer is a choice, score or probability that code can branch on, and it is logged so you can audit it.
+> The LLM talks. The decision model decides. The gate decides what we are allowed to say.
 
 ## How it works
 
 ```
-Request ─▶ intake decision (category, urgency)
-        ─▶ Bolna calls N vendors in parallel ── live transcript streams to the dashboard
-        ─▶ per-call decisions: got_quote, within_budget, hidden_charges, slot_fits, reliability, outcome
-        ─▶ ranking in code (weights per priority: cheapest / fastest / reliable)
-        ─▶ too few usable quotes? call more vendors
-        ─▶ final decision: best_vendor (choice) + safe_to_auto_book (probability)
-        ─▶ auto-book under your limit, or ask you ─▶ booking call
+Request (group, component, units, area)
+  ─▶ call blood banks in waves: 24×7 first, then nearest; Bolna voice agent, 2+ in parallel
+       direct line no answer? ─▶ try the switchboard ─▶ "please connect me to the blood bank"
+  ─▶ per call: parse transcript (groups heard, units, fee, staff name, read-back)
+              + typed decisions from Jev / Clef: has_requested, confirmed_readback,
+                mentioned_other_group, enough_units, replacement_donor_required, will_hold, open_now
+  ─▶ SAFETY GATE: "confirmed" only if the decision model AND the transcript check agree
+  ─▶ rank confirmed (enough units, travel time, hold, no donor needed) ─▶ split plan if needed
+  ─▶ "Go to Sanjeevani, 4 units confirmed 11:23 by Ramesh, held 1 h, ~5 min away"
 ```
 
-| Piece | File |
+## Failure modes we designed for
+
+| Failure | What we do |
 |---|---|
-| Pipeline | `app/orchestrator.py` |
-| Questions asked of Jev/Clef | `app/decision/questions.py` |
-| Jev + Clef clients, fallback chain | `app/decision/http.py`, `app/decision/base.py` |
-| Offline stand-in for the decision model | `app/decision/mock.py` |
-| Ranking weights | `app/ranking.py` |
-| Bolna calls (live) / simulator (free) | `app/providers/bolna.py`, `app/providers/sim.py` |
-| Dashboard | `app/templates/index.html`, `app/static/` |
-| Agent prompt | `agent/vendor_caller_prompt.md` |
+| Misheard group ("O negative" heard as "O positive") | The agent always says the group two ways ("O negative, that is O minus") and finishes with an explicit read-back. "Confirmed" needs the model (≥0.9) and a deterministic transcript check to agree, with no other group mentioned. Otherwise the result is **unconfirmed: call to verify**. |
+| STT hears "O" as "zero" or "oh" | The group parser normalises it (`zero negative` → `O-`). |
+| Blood banks won't reserve by phone | We promise confirmed availability with a time and staff name, not a reservation. We ask whether they'll hold the units, and that boosts ranking. |
+| Nobody answers at night | 24×7 banks are called first, in parallel waves. Each facility has several numbers (direct line → switchboard), and no-answer or voicemail counts as **unknown**, never "no stock". |
+| Not enough units at one bank | A split plan combines banks, with a warning to send two people. |
+| Replacement donor required | Detected and flagged; ranked lower. |
+| Decision model down during live calls | Falls back to a heuristic, but the gate refuses to confirm on heuristic answers. |
+| Agent says the requirement as stock ("we need 2 units") | The units parser only trusts staff lines or the "Confirming:" read-back. |
+| Privacy | No patient name or condition on calls, only the hospital and area. |
+| Disclosure | The agent says it is an AI and that the call may be recorded. |
+| Runaway cost or overloaded lines | Per-search cap on paid calls, account concurrency limit, search deadline. |
 
 ## Run it (free, simulated)
 
@@ -38,48 +43,31 @@ copy .env.example .env
 .venv\Scripts\python -m uvicorn app.main:app --port 8000
 ```
 
-Open http://localhost:8000 and press **Start calling**. Simulated vendors have personalities: honest, hidden fees, too expensive, no slot, vague, refuses, no answer. That lets you see every decision path without spending anything.
+Open http://localhost:8000, pick **O-**, and press **Find blood now**. The simulated blood banks cover every path: stock, partial stock, replacement donor, out of stock, misheard group, ambiguous answer, switchboard transfer, closed, no answer, voicemail.
 
 Tests: `.venv\Scripts\python -m pytest`
 
-## Turn on real decisions
+## Real decisions and real calls
 
-- **Clef:** set `DECISION_BACKEND=clef`, `CF_ACCOUNT_ID` and `CF_API_TOKEN` (Workers AI). Uses `clef-flash` by default.
-- **Jev:** set `DECISION_BACKEND=jev` and `TYPESAFE_API_KEY` (early access at console.typesafe.ai). If Jev fails, Phonewala falls back to Clef, then to the mock.
+- **Clef:** set `DECISION_BACKEND=clef`, `CF_ACCOUNT_ID` and `CF_API_TOKEN` (Cloudflare Workers AI).
+- **Jev:** set `DECISION_BACKEND=jev` and `TYPESAFE_API_KEY`.
+- **Bolna:**
+  1. `scripts\check_account.py` shows balance and concurrency.
+  2. `scripts\create_agent.py` creates the agent; use `--update` to push prompt changes.
+  3. `scripts\test_call.py +91XXXXXXXXXX O-` makes one test call to your own phone.
 
-The dashboard's decision log shows which backend answered each question and how fast.
+  Trial accounts can only call verified numbers. Put those in `data/facilities_live.json` (gitignored) and set `FACILITIES_FILE` and `LIVE_MODE=true`.
 
-## Turn on real calls (the $5 credit)
+Real calls so far: 51–61 s each, 6–9 cents per call.
 
-Each live call costs money. Develop in sim mode and use live calls only for milestones and the demo video.
+## Code map
 
-1. Put `BOLNA_API_KEY` in `.env`. Then check your balance (free):
-   `.venv\Scripts\python scripts\check_account.py`
-2. Create the agent (free):
-   `.venv\Scripts\python scripts\create_agent.py`
-   Copy the `BOLNA_AGENT_ID` it prints into `.env`.
-   For Hindi, open the agent in the Bolna dashboard and switch the transcriber to Sarvam (`saaras`, language `hi`) and the voice to a Sarvam Bulbul voice.
-3. Make one test call to your own phone and play the shopkeeper:
-   `.venv\Scripts\python scripts\test_call.py +91XXXXXXXXXX`
-   Check that the prompt variables (`{{business_name}}`, …) were filled in and the price was parsed. Note the cost it prints.
-4. Edit `data/vendors.json`: put your phone and two friends' phones on three `ac_repair` vendors. **Never call real businesses while testing.**
-5. Set `LIVE_MODE=true` and run the app. Each errand is capped at `MAX_LIVE_CALLS_PER_ERRAND=3` calls. The agent hangs up after 90 seconds, or after 10 seconds of silence.
-
-Suggested budget:
-- ~$1 on single test calls
-- ~$1 on one 3-way parallel rehearsal
-- ~$3 kept for recording the demo
-
-Webhooks are optional. Polling `GET /executions/{id}` works without a public URL. If you run a tunnel (`cloudflared tunnel --url http://localhost:8000`), pass `--webhook https://<tunnel>/webhooks/bolna` to `create_agent.py`.
-
-## Stretch: negotiation during the call
-
-`POST /tools/negotiate` takes `{errand_id, quoted_price}`. It returns `accept` or a `counter` built from the best quote so far. To use it, wire it to a Bolna custom function (needs the tunnel). The agent can then say: "Another service quoted ₹650, can you match it?"
-
-## Demo script (2 minutes)
-
-1. The problem: 60M+ Indian businesses only answer the phone, and getting three quotes takes a dozen calls.
-2. Type "AC service tomorrow evening in HSR Layout, under ₹800" and press Start. Five calls light up, with live transcripts in Hindi and English.
-3. The decision panel: Sri Sai looked cheapest at ₹399 but had a ₹250 visiting fee, so it was flagged. Raju had no slot. Frosty was over budget. CoolCare won at ₹650 all-in. Show the confidence and the decision log with millisecond latencies.
-4. Approve. The booking call confirms the slot.
-5. The pitch: "The LLM talks, the decision model decides." Typed, calibrated and auditable decisions are what make voice agents safe to automate. Next steps are supplier quotes, hospital beds, blood banks and business verification.
+| Piece | File |
+|---|---|
+| Search pipeline (waves, fallback numbers, deadline) | `app/orchestrator.py` |
+| Safety gate, ranking, split plan | `app/ranking.py` |
+| Questions for Jev/Clef | `app/decision/questions.py` |
+| Transcript parsing (groups, units, fee, staff, read-back) | `app/parsing.py` |
+| Bolna provider / free simulator | `app/providers/` |
+| Agent prompt | `agent/blood_bank_caller_prompt.md` |
+| Dashboard | `app/templates/index.html`, `app/static/` |

@@ -1,50 +1,95 @@
-"""Combine decision-model probabilities into one score per vendor.
+"""Safety gate + ranking.
 
-Weights live here, in code, so a product decision ("care more about speed")
-is a one-line change instead of a prompt rewrite.
+The gate decides what we are allowed to tell a family. A facility is shown as
+"confirmed" only when independent checks agree: the decision model's typed
+answers AND a deterministic parse of the transcript. Anything weaker is
+"unconfirmed: call to verify", never "available".
 """
 from __future__ import annotations
 
-from .schemas import CallRecord, Priority
+from .parsing import readback_confirmed
+from .schemas import NOT_REACHED, BloodRequest, CallRecord, PlanItem
 
-WEIGHTS: dict[Priority, dict[str, float]] = {
-    "cheapest": {"price": 0.45, "within_budget": 0.20, "reliability": 0.10, "slot_fits": 0.10, "rating": 0.15, "hidden_charges": -0.20},
-    "fastest":  {"price": 0.15, "within_budget": 0.10, "reliability": 0.15, "slot_fits": 0.45, "rating": 0.15, "hidden_charges": -0.10},
-    "reliable": {"price": 0.10, "within_budget": 0.10, "reliability": 0.35, "slot_fits": 0.10, "rating": 0.35, "hidden_charges": -0.15},
-}
+# Gate thresholds. Deliberately strict: a wrong "yes" sends a family to the wrong place.
+HAS_REQUESTED_MIN = 0.90
+READBACK_MIN = 0.80
+OTHER_GROUP_MAX = 0.30
 
-VIABLE_MIN = {"got_quote": 0.5, "quoted": 0.5}
-
-
-def is_viable(call: CallRecord) -> bool:
-    s = call.signals
-    return (
-        call.price is not None
-        and s.get("got_quote", 0) >= VIABLE_MIN["got_quote"]
-        and s.get("quoted", 0) >= VIABLE_MIN["quoted"]
-    )
+WEIGHTS = {"enough_units": 0.35, "eta": 0.25, "will_hold": 0.15, "no_replacement": 0.15, "open_now": 0.10}
 
 
-def rank(calls: list[CallRecord], priority: Priority) -> list[CallRecord]:
-    """Sets viable/rank_score on each call; returns viable calls best-first."""
-    w = WEIGHTS[priority]
-    viable = [c for c in calls if is_viable(c)]
+def gate(call: CallRecord, req: BloodRequest, trusted: bool) -> None:
+    """Sets call.availability and call.gate_reasons. `trusted` is False when the answers came
+    from a fallback heuristic during live calls."""
+    s, reasons = call.signals, []
+    if call.status in NOT_REACHED or call.status != "completed":
+        call.availability, call.gate_reasons = "unknown", [f"call {call.status}"]
+        return
+    if call.outcome == "closed" or s.get("open_now", 1) < 0.3:
+        call.availability, call.gate_reasons = "closed", ["closed now"]
+        return
+    if s.get("has_requested", 0) < 0.5:
+        reached = call.outcome not in {"callback_later", "wrong_department"}
+        call.availability = "not_available" if reached else "unknown"
+        call.gate_reasons = [call.outcome or "no clear answer"]
+        others = sorted(set(call.groups_heard) - {req.blood_group})
+        if others:
+            call.gate_reasons.append(f"only {', '.join(others)} mentioned")
+        return
+
+    if s.get("has_requested", 0) < HAS_REQUESTED_MIN:
+        reasons.append("availability not clearly stated")
+    if s.get("confirmed_readback", 0) < READBACK_MIN:
+        reasons.append("staff did not confirm the read-back")
+    if s.get("mentioned_other_group", 1) > OTHER_GROUP_MAX:
+        reasons.append("another or ambiguous blood group came up")
+    if readback_confirmed(call.transcript, req.blood_group) is not True:
+        reasons.append("transcript check: no confirmed read-back of the group")
+    if call.groups_heard and req.blood_group not in call.groups_heard:
+        reasons.append(f"heard {', '.join(sorted(set(call.groups_heard)))}, not {req.blood_group}")
+    if not trusted:
+        reasons.append("decision model unavailable; heuristic answers are not trusted live")
+
+    call.availability = "unconfirmed" if reasons else "confirmed"
+    call.gate_reasons = reasons
+
+
+def rank(calls: list[CallRecord]) -> list[CallRecord]:
+    """Scores confirmed facilities (best first). Others get no score."""
+    confirmed = [c for c in calls if c.availability == "confirmed"]
     for c in calls:
-        c.viable = c in viable
         c.rank_score = None
-    if not viable:
+    if not confirmed:
         return []
-    # Ratio to the cheapest quote: Rs 649 vs Rs 650 should score ~equal, not 0 vs 1.
-    lo = min(c.price for c in viable)
-    for c in viable:
-        price_score = lo / c.price
+    best_eta = min(c.eta_min or 60 for c in confirmed)
+    for c in confirmed:
+        s = c.signals
         feats = {
-            "price": price_score,
-            "within_budget": c.signals.get("within_budget", 0.5),
-            "reliability": c.signals.get("reliability", 0.5),
-            "slot_fits": c.signals.get("slot_fits", 0.5),
-            "rating": c.vendor.rating / 5,
-            "hidden_charges": c.signals.get("hidden_charges", 0.0),
+            "enough_units": s.get("enough_units", 0.5),
+            "eta": best_eta / (c.eta_min or 60),
+            "will_hold": s.get("will_hold", 0.3),
+            "no_replacement": 1 - s.get("replacement_donor_required", 0.5),
+            "open_now": s.get("open_now", 0.5),
         }
-        c.rank_score = round(sum(w[k] * feats[k] for k in w), 4)
-    return sorted(viable, key=lambda c: -c.rank_score)
+        c.rank_score = round(sum(WEIGHTS[k] * v for k, v in feats.items()), 4)
+    return sorted(confirmed, key=lambda c: -c.rank_score)
+
+
+def plan_units(ranked: list[CallRecord], first: CallRecord, needed: int) -> list[PlanItem]:
+    """Where to get `needed` units: the chosen facility first, topping up from the next best
+    if it cannot cover all of them. Unknown counts are assumed to be 1."""
+    order = [first] + [c for c in ranked if c is not first]
+    plan, remaining = [], needed
+    for c in order:
+        if remaining <= 0:
+            break
+        have = c.units if c.units is not None else (needed if c.signals.get("enough_units", 0) >= 0.5 else 1)
+        take = min(have, remaining)
+        if take > 0:
+            plan.append(PlanItem(call_id=c.id, facility=c.facility.name, units=take))
+            remaining -= take
+    return plan
+
+
+def units_covered(plan: list[PlanItem]) -> int:
+    return sum(p.units for p in plan)

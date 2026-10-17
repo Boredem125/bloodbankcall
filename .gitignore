@@ -1,6 +1,6 @@
 .venv/
 .env
-data/vendors_live.json
+data/facilities_live.json
 __pycache__/
 .pytest_cache/
 *.pyc
