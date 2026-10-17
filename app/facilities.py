@@ -29,7 +29,8 @@ CITY_KMPH = 22  # average Bengaluru road speed, generous at night
 
 
 def load_facilities(path: Path) -> list[Facility]:
-    return [Facility(**f) for f in json.loads(path.read_text(encoding="utf-8"))]
+    # utf-8-sig: Windows editors often save JSON with a byte-order mark
+    return [Facility(**f) for f in json.loads(path.read_text(encoding="utf-8-sig"))]
 
 
 def _km(a: tuple[float, float], b: tuple[float, float]) -> float:
