@@ -37,6 +37,14 @@ class Settings(BaseSettings):
     sim_speed: float = 1.0  # >1 makes simulated calls faster
     sim_poll_s: float = 0.5
 
+    # Load, cost and abuse limits
+    cache_ttl_min: float = 20.0  # reuse a "confirmed"/"not available" answer this fresh instead of calling again
+    max_calls_per_number_per_hour: int = 4  # across all searches; protects blood bank phone lines
+    max_searches_per_client_per_hour: int = 5  # per request IP; more get HTTP 429
+    max_concurrent_searches: int = 3  # searches running at once, all clients
+    trust_forwarded_for: bool = False  # use X-Forwarded-For as the client IP (only behind your own proxy)
+    pickup_stats_file: str = ""  # e.g. data/pickup_stats.json to keep learned pickup rates; empty = memory only
+
     facilities_file: Path = ROOT / "data" / "facilities.json"
     sim_scripts_file: Path = ROOT / "data" / "sim_scripts.json"
 

@@ -94,6 +94,7 @@ class CallRecord(BaseModel):
     rank_score: float | None = None
     eta_min: int | None = None
     confirmed_at: float | None = None
+    reused_at: float | None = None  # set when this answer came from the freshness cache (when it was heard)
     cost_cents: float = 0.0
     duration_s: float = 0.0
     recording_url: str | None = None
