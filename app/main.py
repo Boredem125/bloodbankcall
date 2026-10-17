@@ -58,10 +58,17 @@ async def index(request: Request):
 
 @app.post("/searches")
 async def create_search(req: BloodRequest, request: Request) -> dict[str, str]:
+    from .guard import client_key, get_guard
+
+    guard = get_guard(request.app.state)
+    refused = guard.admit(client_key(request, request.app.state.settings.trust_forwarded_for))
+    if refused:
+        raise HTTPException(429, refused)
     search = store.add(Search(request=req))
     task = asyncio.create_task(request.app.state.orch.run(search.id))
     request.app.state.tasks.add(task)
     task.add_done_callback(request.app.state.tasks.discard)
+    task.add_done_callback(lambda _t: guard.release())
     return {"id": search.id}
 
 

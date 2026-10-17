@@ -4,3 +4,4 @@ data/facilities_live.json
 __pycache__/
 .pytest_cache/
 *.pyc
+data/pickup_stats.json
