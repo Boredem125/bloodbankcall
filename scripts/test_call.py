@@ -1,7 +1,8 @@
 """Place ONE live call to your own (verified) phone and print what the pipeline extracts.
 
-Usage:  .venv\\Scripts\\python.exe scripts\\test_call.py +91XXXXXXXXXX [O-] [units]
+Usage:  .venv\\Scripts\\python.exe scripts\\test_call.py +91XXXXXXXXXX [O-] [units] [--retry N]
 Answer and play blood bank staff. This spends Bolna credit (the agent hangs up within 150 s).
+--retry N asks Bolna to redial up to N times (1 minute apart) on no-answer/busy; each retry is billed.
 """
 from __future__ import annotations
 
@@ -12,15 +13,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.config import get_settings  # noqa: E402
 from app.parsing import parse_fee, parse_staff, parse_units, readback_confirmed, vendor_groups  # noqa: E402
-from app.providers.bolna import BolnaProvider  # noqa: E402
+from app.providers.bolna import BolnaProvider, retry_config  # noqa: E402
 from app.schemas import COMPONENTS, GROUP_CONFIRM, GROUP_SPOKEN, TERMINAL_STATUSES, Facility, Phone  # noqa: E402
 
 
-async def main(number: str, group: str, units: int) -> None:
+async def main(number: str, group: str, units: int, retries: int = 0) -> None:
     s = get_settings()
     if not (s.bolna_api_key and s.bolna_agent_id):
         sys.exit("Set BOLNA_API_KEY and BOLNA_AGENT_ID in .env first.")
-    p = BolnaProvider(s)
+    p = BolnaProvider(s, retry=retry_config(retries) if retries else None)
     phone = Phone(number=number, label="blood bank")
     facility = Facility(id="me", name="Test Blood Centre", area="HSR Layout", lat=12.91, lon=77.64, phones=[phone])
     exec_id = await p.start(facility, phone, {
@@ -47,9 +48,15 @@ async def main(number: str, group: str, units: int) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2 or not sys.argv[1].startswith("+"):
-        sys.exit("Usage: test_call.py +91XXXXXXXXXX [O-] [units]")
-    grp = sys.argv[2] if len(sys.argv) > 2 else "O-"
+    argv = sys.argv[1:]
+    retries = 0
+    if "--retry" in argv:
+        i = argv.index("--retry")
+        retries = int(argv[i + 1])
+        del argv[i:i + 2]
+    if not argv or not argv[0].startswith("+"):
+        sys.exit("Usage: test_call.py +91XXXXXXXXXX [O-] [units] [--retry N]")
+    grp = argv[1] if len(argv) > 1 else "O-"
     if grp not in GROUP_SPOKEN:
         sys.exit(f"Blood group must be one of {list(GROUP_SPOKEN)}")
-    asyncio.run(main(sys.argv[1], grp, int(sys.argv[3]) if len(sys.argv) > 3 else 2))
+    asyncio.run(main(argv[0], grp, int(argv[2]) if len(argv) > 2 else 2, retries))
