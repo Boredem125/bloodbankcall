@@ -11,6 +11,7 @@ const AVAIL = {
 };
 let source = null;
 let current = null;
+let pack = { key: null, data: null };
 
 $("#search-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -58,7 +59,7 @@ function renderVerdict(s) {
   const warn = s.warnings?.length ? `<ul class="warnings">${s.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : "";
   if (s.status === "failed") {
     v.className = "panel verdict failed";
-    v.innerHTML = `<h3>No confirmed blood yet</h3><p class="why">${esc(s.reason)}</p>${warn}`;
+    v.innerHTML = `<h3>No confirmed blood yet</h3><p class="why">${esc(s.reason)}</p>${warn}${gopackHtml(s)}`;
     return;
   }
   const chosen = s.calls.find((c) => c.id === s.chosen_call_id);
@@ -77,8 +78,56 @@ function renderVerdict(s) {
       <span>📞 ${esc(chosen.phone.number)}</span>
       <span>choice confidence ${pct(s.choice_confidence)}</span>
     </div>
-    <p class="why">${esc(s.reason)}</p>${plan}${warn}`;
+    <p class="why">${esc(s.reason)}</p>${plan}${warn}${gopackHtml(s)}`;
 }
+
+// ---- family handoff ("go-pack"): fetched once a search has finished
+function gopackHtml(s) {
+  if (!["done", "failed"].includes(s.status)) return "";
+  const key = `${s.id}:${s.status}`;
+  if (pack.key !== key) {
+    pack = { key, data: null };
+    fetch(`/searches/${s.id}/gopack`).then((r) => (r.ok ? r.json() : null)).then((d) => {
+      if (pack.key === key && d) { pack.data = d; if (current) renderVerdict(current); }
+    }).catch(() => {});
+  }
+  const g = pack.data;
+  if (!g) return `<div class="gopack"><h3>Send to family</h3><p class="meta">Preparing message…</p></div>`;
+  const share = `<div class="share">
+      <button type="button" class="copy-msg">Copy message</button>
+      <a class="btn" href="${esc(g.whatsapp_url)}" target="_blank" rel="noopener">WhatsApp</a>
+      <a class="btn" href="${esc(g.sms_url)}">SMS</a>
+      ${g.facility ? `<a class="btn" href="${esc(g.facility.maps_url)}" target="_blank" rel="noopener">Map</a>` : ""}
+    </div>`;
+  const pickups = g.pickups.length > 1 ? `<ul class="pickups">${g.pickups.map((p) => `<li><b>${p.units} unit(s)</b> · ${esc(p.name)} ·
+      <a href="tel:${esc(p.phone)}">${esc(p.phone)}</a> · <a href="${esc(p.maps_url)}" target="_blank" rel="noopener">map</a></li>`).join("")}</ul>` : "";
+  const hold = g.facility?.hold ? `<p class="meta">${esc(g.facility.hold)}${g.facility.confirmed_at_text ? ` · confirmed ${esc(g.facility.confirmed_at_text)}` : ""}</p>` : "";
+  const docs = g.documents.length ? `<h4>Bring</h4><ul class="checklist">${g.documents.map((d) => `<li><label><input type="checkbox"> ${esc(d)}</label></li>`).join("")}</ul>` : "";
+  const leads = g.leads.length ? `<h4>Leads to call (not confirmed)</h4><ul class="pickups">${g.leads.map((l) =>
+      `<li>${esc(l.name)} · <a href="tel:${esc(l.phone)}">${esc(l.phone)}</a>${l.reasons.length ? ` <span class="meta">(${esc(l.reasons.join("; "))})</span>` : ""}</li>`).join("")}</ul>` : "";
+  const alt = g.alternatives ? `<div class="alts"><h4>Other groups to ask the doctor about</h4>
+      ${g.alternatives.groups.length ? `<p class="alt-groups">${g.alternatives.groups.map((x) => `<span>${esc(x)}</span>`).join("")}</p>`
+        : `<p>No other group is compatible for ${esc(g.blood_group)} ${esc(g.component_label)}.</p>`}
+      <p class="meta">${esc(g.alternatives.note)}</p>
+      <p class="alt-warn">⚠ ${esc(g.alternatives.warning)} We do not search for these on our own.</p></div>` : "";
+  return `<div class="gopack"><h3>Send to family</h3>${share}${pickups}${hold}${docs}${leads}${alt}
+    <details><summary>Message preview</summary><pre class="msg">${esc(g.message)}</pre></details></div>`;
+}
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch (_) {
+    const t = Object.assign(document.createElement("textarea"), { value: text });
+    document.body.appendChild(t); t.select();
+    const ok = document.execCommand("copy"); t.remove(); return ok;
+  }
+}
+
+$("#verdict").addEventListener("click", async (e) => {
+  const b = e.target.closest(".copy-msg");
+  if (!b || !pack.data) return;
+  b.textContent = (await copyText(pack.data.message)) ? "Copied ✓" : "Copy failed";
+  setTimeout(() => { b.textContent = "Copy message"; }, 2000);
+});
 
 function sigRow(label, value, bad = false) {
   if (value == null) return "";

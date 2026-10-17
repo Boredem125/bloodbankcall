@@ -14,6 +14,7 @@ from fastapi.templating import Jinja2Templates
 from .config import get_settings
 from .decision import build_engine
 from .facilities import AREAS, load_facilities
+from .gopack import GoPack, build_gopack
 from .orchestrator import Orchestrator
 from .providers import BolnaProvider, build_provider
 from .schemas import BLOOD_GROUPS, COMPONENTS, BloodRequest, Search
@@ -70,6 +71,17 @@ async def get_search(search_id: str) -> Search:
     if search is None:
         raise HTTPException(404, "unknown search")
     return search
+
+
+@app.get("/searches/{search_id}/gopack")
+async def get_gopack(search_id: str) -> GoPack:
+    """Family handoff for a finished search: where to go, what to bring, a shareable message."""
+    search = store.get(search_id)
+    if search is None:
+        raise HTTPException(404, "unknown search")
+    if search.status not in ("done", "failed"):
+        raise HTTPException(409, f"search is still {search.status}")
+    return build_gopack(search)
 
 
 @app.get("/searches/{search_id}/stream")
