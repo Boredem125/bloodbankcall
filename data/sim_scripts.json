@@ -1,0 +1,80 @@
+{
+  "good_value": {
+    "lines": [
+      "assistant: Namaste, am I speaking with {business}? I'm calling for {customer_name}, who needs {task} in {area}.",
+      "user: Haan ji, boliye.",
+      "assistant: Can you do it {time_window}? And what would the total cost be?",
+      "user: Yes, we have a slot at {slot}. Total will be {price} rupees, service included.",
+      "assistant: Is there any visiting charge or anything extra on top of that?",
+      "user: No sir, {price} is final. Nothing more.",
+      "assistant: Great, so {price} rupees total at {slot}. I'll confirm with {customer_name} and get back to you. Thank you!",
+      "user: Theek hai, thank you."
+    ]
+  },
+  "cheap_hidden": {
+    "lines": [
+      "assistant: Hello, is this {business}? I'm calling for {customer_name}, who needs {task} in {area}.",
+      "user: Yes yes, tell me.",
+      "assistant: Can you come {time_window}? What will it cost?",
+      "user: Service is only {base} rupees, sir, cheapest in the area. Slot at {slot}.",
+      "assistant: Any visiting charge or extra charges?",
+      "user: Visiting charge {extra_fee} alag se, and parts or gas extra if needed.",
+      "assistant: So the minimum total would be how much?",
+      "user: Minimum {price} rupees total, parts extra."
+    ]
+  },
+  "expensive": {
+    "lines": [
+      "assistant: Hi, am I speaking with {business}? I'm calling for {customer_name} about {task} in {area}.",
+      "user: Yes, this is {business}.",
+      "assistant: Can you do it {time_window}, and what is the total cost?",
+      "user: We can come at {slot}. We charge {price} rupees, best certified technicians.",
+      "assistant: The customer's budget is around {budget} rupees. Is there any flexibility?",
+      "user: Sorry sir, {price} is our fixed rate, all inclusive."
+    ]
+  },
+  "no_slot": {
+    "lines": [
+      "assistant: Namaste, is this {business}? I'm calling for {customer_name}, who needs {task} in {area}.",
+      "user: Haan ji.",
+      "assistant: Is there a slot {time_window}?",
+      "user: Sorry, tomorrow we are fully booked. Day after we can come.",
+      "assistant: Understood. What would the price be?",
+      "user: Day after, {price} rupees.",
+      "assistant: Okay, thank you, I'll let {customer_name} know."
+    ]
+  },
+  "hedgy": {
+    "lines": [
+      "assistant: Hello, {business}? I'm calling for {customer_name} about {task} in {area}.",
+      "user: Haan, boliye.",
+      "assistant: Can you do it {time_window}, and what would it cost?",
+      "user: Roughly {price} rupees, depends on the problem. Shayad {slot}, dekhte hain.",
+      "assistant: Can you confirm a fixed price and time?",
+      "user: Can't say exactly before seeing it, maybe {price}, maybe more."
+    ]
+  },
+  "refused": {
+    "lines": [
+      "assistant: Hi, is this {business}? I'm calling for {customer_name}, who needs {task} in {area}.",
+      "user: No sir, we don't do that, we only do new installations.",
+      "assistant: No problem, thank you for your time."
+    ]
+  },
+  "callback": {
+    "lines": [
+      "assistant: Hello, {business}? I'm calling for {customer_name} about {task}.",
+      "user: I'm on a job right now, please call back later.",
+      "assistant: Sure, thank you."
+    ]
+  },
+  "no_answer": {"lines": [], "final": "no-answer"},
+  "busy": {"lines": [], "final": "busy"},
+  "booking": {
+    "lines": [
+      "assistant: Hello {business}, this is the assistant calling back for {customer_name}. We'd like to book {task} at {slot} for {price} rupees.",
+      "user: Okay, confirmed. Our technician will reach {area} at {slot}.",
+      "assistant: Thank you! {customer_name} will be expecting you."
+    ]
+  }
+}
