@@ -31,5 +31,17 @@
    "sim": {"persona": "callback"}},
   {"id": "voicebox", "name": "Koramangala Community Blood Bank", "area": "Koramangala", "lat": 12.9318, "lon": 77.6280, "open_24x7": false,
    "phones": [{"number": "+910000000112", "label": "blood bank"}],
-   "sim": {"persona": "voicemail"}}
+   "sim": {"persona": "voicemail"}},
+  {"id": "rotary_hebbal", "name": "Hebbal Rotary Blood Bank", "area": "Hebbal", "lat": 13.0402, "lon": 77.5889, "open_24x7": false,
+   "phones": [{"number": "+910000000113", "label": "blood bank"}],
+   "sim": {"persona": "has_stock", "stock": 3, "fee": 1200, "staff": "Kavya"}},
+  {"id": "jayanagar_general", "name": "Jayanagar General Hospital Blood Bank", "area": "Jayanagar", "lat": 12.9233, "lon": 77.5990, "open_24x7": false,
+   "phones": [{"number": "+910000000114", "label": "blood bank"}, {"number": "+910000000115", "label": "casualty"}],
+   "sim": {"personas": ["busy", "switchboard"], "stock": 2, "fee": 1350, "staff": "Prakash"}},
+  {"id": "sunrise", "name": "Whitefield Sunrise Blood Centre", "area": "Whitefield", "lat": 12.9662, "lon": 77.7421, "open_24x7": false,
+   "phones": [{"number": "+910000000116", "label": "blood bank"}],
+   "sim": {"persona": "partial", "stock": 1, "fee": 1500, "staff": "Meera"}},
+  {"id": "hsr_storage", "name": "HSR Community Blood Storage Centre", "area": "HSR Layout", "lat": 12.9105, "lon": 77.6512, "open_24x7": false,
+   "phones": [{"number": "+910000000117", "label": "blood bank"}],
+   "sim": {"persona": "out_of_stock", "other_group": "A positive"}}
 ]

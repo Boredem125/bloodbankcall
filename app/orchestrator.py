@@ -8,12 +8,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from pathlib import Path
 
-from .config import Settings
+from .cache import FreshnessCache, age_text
+from .config import ROOT, Settings
 from .decision import FallbackEngine
 from .decision.base import choice, noul
 from .decision.questions import call_questions, call_state, final_questions, final_state
-from .facilities import call_order, eta_minutes
+from .facilities import PickupStats, call_order, eta_minutes, phone_order
+from .guard import NumberLimiter
 from .parsing import parse_fee, parse_staff, parse_units, vendor_groups
 from .providers import CallProvider
 from .ranking import gate, plan_units, rank, units_covered
@@ -36,6 +39,7 @@ SIGNALS = [
     "has_requested", "confirmed_readback", "mentioned_other_group", "enough_units",
     "replacement_donor_required", "will_hold", "open_now",
 ]
+PICKUP_MISS = {"no-answer", "busy", "voicemail"}  # the line rang and nobody (human) took it
 
 
 class Orchestrator:
@@ -49,6 +53,11 @@ class Orchestrator:
         # Live calls beyond the account's concurrency wait here instead of being rejected by Bolna.
         self._lines = asyncio.Semaphore(max(settings.live_concurrency, 1))
         self._budget: dict[str, int] = {}  # paid calls left, per search
+        # Memory across searches: fresh answers to reuse, per-number call counts, learned pickup rates.
+        self.cache = FreshnessCache(settings.cache_ttl_min * 60)
+        self.limiter = NumberLimiter(settings.max_calls_per_number_per_hour)
+        path = Path(settings.pickup_stats_file) if settings.pickup_stats_file else None
+        self.pickup = PickupStats(path if path is None or path.is_absolute() else ROOT / path)
 
     @property
     def live(self) -> bool:
@@ -77,7 +86,7 @@ class Orchestrator:
 
     async def _run(self, search: Search) -> None:
         req = search.request
-        queue = call_order(self.facilities, req.area)
+        queue = call_order(self.facilities, req.area, self.pickup)
         self._budget[search.id] = self.s.max_live_calls_per_search if self.live else 10_000
         deadline = time.monotonic() + self.s.search_deadline_s
         wave = self.s.live_concurrency if self.live else self.s.wave_size
@@ -107,20 +116,50 @@ class Orchestrator:
 
     # ------------------------------------------------------------ per facility
     async def _facility(self, search: Search, f: Facility) -> None:
-        """Try each number of a facility until someone answers (direct line, then switchboard...)."""
-        for attempt, phone in enumerate(f.phones, start=1):
+        """Reuse a fresh answer if we have one; else try each number until someone answers
+        (direct line first, unless another number picks up clearly more often at this hour)."""
+        req = search.request
+        hit = self.cache.get(f.id, req)
+        if hit:
+            call, age = hit
+            call.eta_min = eta_minutes(req.area, f)
+            search.calls.append(call)
+            what = "confirmation" if call.availability == "confirmed" else "'not available'"
+            search.note(f"{f.name}: reused {what} from {age_text(age)} (not called again)")
+            self._emit(search)
+            return
+        phones = phone_order(f, self.pickup)
+        if phones[0] is not f.phones[0]:
+            search.note(f"{f.name}: trying {phones[0].label} first (picks up more often at this hour)")
+        attempt = 0
+        for i, phone in enumerate(phones):
             if self._budget[search.id] <= 0:
                 return
+            if not self.limiter.allow(phone.number):
+                search.note(
+                    f"{f.name}: skipped {phone.label} {phone.number}, already called "
+                    f"{self.limiter.max_per_hour} times in the last hour"
+                )
+                self._emit(search)
+                continue
             self._budget[search.id] -= 1
-            call = CallRecord(facility=f, phone=phone, attempt=attempt, eta_min=eta_minutes(search.request.area, f))
+            self.limiter.record(phone.number)
+            attempt += 1
+            call = CallRecord(facility=f, phone=phone, attempt=attempt, eta_min=eta_minutes(req.area, f))
             search.calls.append(call)
             await self._place_and_track(search, call)
+            self._learn_pickup(call)
             if call.status not in NOT_REACHED:
                 await self._assess(search, call)
                 return
-            if attempt < len(f.phones):
-                search.note(f"{f.name}: {call.status} on {phone.label}; trying {f.phones[attempt].label}")
+            if i + 1 < len(phones):
+                search.note(f"{f.name}: {call.status} on {phone.label}; trying {phones[i + 1].label}")
                 self._emit(search)
+
+    def _learn_pickup(self, call: CallRecord) -> None:
+        # Our own failures (API error, timeout, cancel) say nothing about the blood bank's line.
+        if call.status == "completed" or call.status in PICKUP_MISS:
+            self.pickup.record(call.phone.number, answered=call.status == "completed")
 
     async def _assess(self, search: Search, call: CallRecord) -> None:
         req = search.request
@@ -130,9 +169,12 @@ class Orchestrator:
         answers, backend = await self._decide(search, "call", call_state(req, call), call_questions(req), call.id)
         call.outcome, _ = choice(answers, "outcome")
         call.signals = {k: noul(answers, k) for k in SIGNALS}
-        gate(call, req, trusted=not (self.live and backend == "mock"))
+        trusted = not (self.live and backend == "mock")
+        gate(call, req, trusted=trusted)
         if call.availability == "confirmed":
             call.confirmed_at = time.time()
+        if trusted:
+            self.cache.put(call, req)
         search.note(
             f"{call.facility.name}: {call.availability}"
             + (f", {call.units} unit(s)" if call.units else "")
@@ -228,6 +270,11 @@ class Orchestrator:
             )
         if len(search.plan) > 1:
             search.warnings.append("Units are split across blood banks; send two people if possible.")
+        if chosen.reused_at is not None:
+            search.warnings.append(
+                f"{chosen.facility.name} confirmed {age_text(self.cache.clock() - chosen.reused_at)} on an earlier search "
+                "and was not called again."
+            )
         if chosen.signals.get("replacement_donor_required", 0) >= 0.5:
             search.warnings.append(f"{chosen.facility.name} needs a replacement donor. Bring one along.")
         if unconfirmed:
