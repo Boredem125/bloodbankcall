@@ -136,3 +136,24 @@ td.num { font-variant-numeric: tabular-nums; }
 .plan { margin: 6px 0; padding-left: 20px; }
 .card.chosen { border-color: var(--ok); box-shadow: 0 0 0 4px var(--ok-soft); }
 tr.chosen td { background: var(--ok-soft); }.two > * { min-width: 0; }  /* let the table scroll instead of widening the page */
+
+/* family handoff (go-pack) */
+.gopack { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); min-width: 0; }
+.gopack h4 { margin: 12px 0 6px; font-size: 13px; }
+.share { display: flex; flex-wrap: wrap; gap: 8px; }
+.verdict .share button, .share .btn { flex: 1 1 110px; width: auto; padding: 10px 14px; text-align: center; font: 600 14px system-ui; border-radius: 8px; }
+.share .btn { border: 1px solid var(--accent); color: var(--accent); background: var(--panel); text-decoration: none; }
+.pickups, .checklist { margin: 6px 0; padding-left: 18px; font-size: 14px; }
+.pickups li, .checklist li { margin: 4px 0; overflow-wrap: anywhere; }
+.checklist { list-style: none; padding-left: 0; }
+.checklist label { display: flex; gap: 8px; align-items: flex-start; color: var(--ink); font-size: 14px; margin: 0; }
+.checklist input { width: auto; margin: 3px 0 0; flex: none; }
+.alts { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--warn); border-radius: 8px; background: var(--warn-soft); }
+.alts h4 { margin-top: 0; }
+.alt-groups { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.alt-groups span { padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); font-weight: 700; }
+.alt-warn { margin: 6px 0 0; color: var(--warn); font-weight: 600; font-size: 13px; }
+.gopack details { margin-top: 10px; font-size: 13px; }
+.gopack summary { cursor: pointer; color: var(--muted); }
+.msg { font: 12px/1.45 var(--mono); background: var(--bg); border-radius: 8px; padding: 8px; white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0 0; }
+.gopack a:not(.btn) { color: var(--accent); }
