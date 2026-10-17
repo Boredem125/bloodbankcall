@@ -7,7 +7,7 @@ answers AND a deterministic parse of the transcript. Anything weaker is
 """
 from __future__ import annotations
 
-from .parsing import readback_confirmed
+from .parsing import readback_confirmed, readback_units, said_unavailable, vendor_ambiguous
 from .schemas import NOT_REACHED, BloodRequest, CallRecord, PlanItem
 
 # Gate thresholds. Deliberately strict: a wrong "yes" sends a family to the wrong place.
@@ -43,10 +43,21 @@ def gate(call: CallRecord, req: BloodRequest, trusted: bool) -> None:
         reasons.append("staff did not confirm the read-back")
     if s.get("mentioned_other_group", 1) > OTHER_GROUP_MAX:
         reasons.append("another or ambiguous blood group came up")
-    if readback_confirmed(call.transcript, req.blood_group) is not True:
+    t = call.transcript
+    if readback_confirmed(t, req.blood_group) is not True:
         reasons.append("transcript check: no confirmed read-back of the group")
-    if call.groups_heard and req.blood_group not in call.groups_heard:
-        reasons.append(f"heard {', '.join(sorted(set(call.groups_heard)))}, not {req.blood_group}")
+    # Any other group from the staff is a conflict, even if the requested one was also named
+    # ("O negative nahi hai, positive hai" names both).
+    if others := sorted(set(call.groups_heard) - {req.blood_group}):
+        missing = "" if req.blood_group in call.groups_heard else f", not {req.blood_group}"
+        reasons.append(f"heard {', '.join(others)}{missing}")
+    if amb := vendor_ambiguous(t, req.blood_group):
+        reasons.append(f"unclear group mention: {amb[0]!r}")
+    if said_unavailable(t):
+        reasons.append("staff said it is not available at some point")
+    rb_units = readback_units(t)
+    if rb_units is not None and call.units is not None and rb_units != call.units:
+        reasons.append(f"read-back said {rb_units} units, staff said {call.units}")
     if not trusted:
         reasons.append("decision model unavailable; heuristic answers are not trusted live")
 

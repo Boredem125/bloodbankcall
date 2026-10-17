@@ -28,20 +28,25 @@ def call_questions(req: BloodRequest) -> dict[str, Any]:
     return {
         "has_requested": {
             "type": "noul",
-            "instructions": f"The blood bank staff said they currently have {need} available.",
+            "instructions": (
+                f"The blood bank staff said they currently have {need} available, and did not later "
+                "take it back (for example 'sorry, it is finished')."
+            ),
         },
         "confirmed_readback": {
             "type": "noul",
             "instructions": (
                 f"When the assistant read back {GROUP_SPOKEN[req.blood_group]} and the number of units, "
-                "the staff clearly agreed it was correct."
+                "the staff clearly agreed it was correct. A hesitant, conditional or later-corrected yes, or a yes "
+                "to a different group or unit count, is not agreement."
             ),
         },
         "mentioned_other_group": {
             "type": "noul",
             "instructions": (
                 f"The staff's answer about what is available names a blood group other than "
-                f"{GROUP_SPOKEN[req.blood_group]}, or is ambiguous about positive vs negative."
+                f"{GROUP_SPOKEN[req.blood_group]}, or is ambiguous about positive vs negative "
+                "(for example only a letter like 'O hai')."
             ),
         },
         "enough_units": {

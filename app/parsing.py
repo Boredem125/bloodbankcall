@@ -22,7 +22,10 @@ _MULT = {"hundred": 100, "sau": 100, "thousand": 1000, "hazaar": 1000, "hazar": 
 _WORD = re.compile(r"[A-Za-z]+|[^A-Za-z]+")
 # Hindi number words that are also everyday words ("do it", "saath mein", "ek din").
 _AMBIGUOUS = {"do", "ek", "saath", "teen", "char", "das"}
-_CURRENCY = {"rupees", "rupee", "rupaye", "rupay", "rs", "inr", "unit", "units", "bag", "bags"}
+_CURRENCY = {
+    "rupees", "rupee", "rupaye", "rupay", "rs", "inr", "unit", "units", "bag", "bags", "bottle", "bottles",
+    "pint", "pints", "packet", "packets",
+}
 
 
 def _number_follows(toks: list[str], n: int) -> bool:
@@ -159,35 +162,97 @@ def parse_price(transcript: str, extracted: dict[str, Any] | None = None) -> int
 
 
 # ---------------------------------------------------------------- blood bank calls
-# STT often hears "O" as "oh" or "zero" (which words_to_digits turns into 0).
-_GROUP = re.compile(
-    r"(?<![\w])(ab|a|b|o|oh|0)\s*-?\s*(positive|negative|pos\b|neg\b|plus|minus|\+ve|-ve|\+|-)",
-    re.I,
+# STT often hears "O" as "oh" or "zero" (which words_to_digits turns into 0), and splits "AB" into "A B".
+_SIGNS = r"positive|negative|pos\b|neg\b|plus|minus|\+ve|-ve|\+|-"
+_GROUP = re.compile(rf"(?<![\w])(a\s+b|ab|a|b|o|oh|0)\s*-?\s*({_SIGNS})", re.I)
+# A sign word on its own ("O negative nahi hai, positive hai") refers back to the last letter named.
+# "plus"/"minus" are left out: they are everyday words ("two units plus one").
+_BARE_SIGN = re.compile(r"(?<![\w+-])(positive|negative|\+ve|-ve)\b", re.I)
+# Letters STT produces for B/D/P/E/V confusions; never a valid group, so always ambiguous.
+_BAD_LETTER = re.compile(rf"(?<![\w])(d|p|e|v|bee|dee|pee)\s*-?\s*({_SIGNS})", re.I)
+# A group letter with no sign ("O is there", "haan B hai"). Lowercase a/ab are the English article
+# and Hindi "ab" (now), so only uppercase A/AB count.
+_LETTER = re.compile(r"(?<![\w'])(AB|A|[OoBb])(?![\w'])")
+_LETTER_BEFORE = re.compile(r"\b(have|got|only|sirf|bas|haan|han|yes|group|just|is)\s*$", re.I)
+_LETTER_AFTER = re.compile(
+    r"^\s*(?:[,.?!]|$|(?:group|hai|he|h|is|are|available|there|ka|ki|ke|wala|wali|chahiye|stock|only|bhi)\b)", re.I
 )
-_UNIT_COUNT = re.compile(r"(?<!\d)(\d{1,2})\s*(?:units?|bags?|bottles?|pints?)\b", re.I)
+_UNIT_COUNT = re.compile(r"(?<!\d)(\d{1,2})\s*(?:units?|bags?|bottles?|pints?|packets?)\b", re.I)
 _STAFF = re.compile(r"\b(?i:this is|my name is|i am|i'm|name is|main)\s+([A-Z][a-z]{2,15})\b")
 _NOT_NAMES = {"Sorry", "Calling", "From", "Speaking", "Not", "The", "Blood", "Here", "Busy", "Checking"}
-_AFFIRM = re.compile(r"^\s*(yes|yeah|yep|haan|ha|han|ji|correct|right|sahi|ok|okay|confirmed|exactly)\b", re.I)
-_NEGATE = re.compile(r"\b(no|not|nahi|nahin|wrong|galat)\b", re.I)
+_NEGATE = re.compile(r"\b(no|not|nope|nah|nahi|nahin|illa|wrong|galat|cancel)\b", re.I)
+_BENIGN = re.compile(r"\b(no|koi) (problem|issue|worries|tension|dikkat)\b|\bnot a problem\b", re.I)
 _UNAVAILABLE = re.compile(
-    r"not available|no stock|out of stock|don'?t have|do not have|nahi hai|khatam|not there|finished|none left",
+    r"not available|no stock|out of stock|don'?t have|do not have|nahi hai|nahin hai|khatam|not there|finished"
+    r"|none left|ek bhi nahi|koi nahi|nahi milega|nahi milegi|\billa\b|\bnil\b|exhausted|used up|all gone"
+    r"|\b0 (units?|bags?|hai)\b|\bno units?\b|\bgone\b",
     re.I,
 )
+# Words a clean "yes" to the read-back may contain. Anything else ("yes, let me check", "yes but expired",
+# "ok sorry not sure") means the staff did not simply agree, so the read-back does not count.
+_YES = {
+    "yes", "yeah", "yep", "yup", "ya", "haan", "han", "ha", "haanji", "hanji", "ji", "correct", "right", "sahi",
+    "ok", "okay", "confirmed", "exactly", "bilkul", "absolutely", "definitely", "perfect", "done", "sure", "theek", "thik",
+}
+_FILLER = {
+    "hai", "he", "h", "sir", "madam", "maam", "ma'am", "mam", "bhai", "that's", "thats", "that", "is", "it", "it's",
+    "its", "all", "fine", "good", "um", "umm", "uh", "hmm", "ah", "achha", "acha", "accha", "so", "very", "true",
+    "everything", "we", "will", "keep", "kept", "aside", "rakhenge", "of", "blood", "the", "same",
+}
+_TIME = re.compile(r"\b(?:for )?\d+ (?:hours?|hrs?|minutes?|mins?|ghante?|ghanta)\b", re.I)
+_CONFIRM = re.compile(r"\bconfirm", re.I)
+# The opening question ("Can you confirm whether you have O negative?") is not a read-back.
+_ASKING = re.compile(r"\b(do you have|have you got|is there|are there|whether|we need|kya)\b|\bavailable( right now)?\s*\?", re.I)
+_RETRACT = re.compile(r"\b(wait|sorry|actually|check)\b", re.I)
+_PHONE = re.compile(
+    r"(?<!\d)(?:\+?91[\s-]?)?(?:\d[\s-]?){9}\d(?!\d)|(?<!\d)(?:0\d{2,4}|1800)[\s-]\d{3,4}[\s-]?\d{3,4}(?!\d)"
+)
+_NOT_FEE = re.compile(r"\b\d+\s*ml\b|\b(?:ward|room|bed|floor|counter|window|gate|token)\s*(?:no\.?|number)?\s*\d+", re.I)
 
 
 def normalize_group(letter: str, sign: str) -> str:
-    letter = "O" if letter.lower() in {"o", "oh", "0"} else letter.upper()
+    letter = "O" if letter.lower() in {"o", "oh", "0"} else re.sub(r"\s+", "", letter).upper()
     neg = sign.lower() in {"negative", "neg", "minus", "-ve", "-"}
     return letter + ("-" if neg else "+")
 
 
 def parse_groups(text: str) -> list[str]:
-    """Blood groups mentioned, normalised: 'O negative', 'zero minus', 'B +ve' -> 'O-', 'O-', 'B+'."""
-    return [normalize_group(m.group(1), m.group(2)) for m in _GROUP.finditer(words_to_digits(text))]
+    """Blood groups mentioned, normalised: 'O negative', 'zero minus', 'B +ve' -> 'O-', 'O-', 'B+'.
+    A lone sign word takes the last letter named before it: 'O negative nahi, positive hai' -> O-, O+."""
+    t = words_to_digits(text)
+    found = [(m.start(), m.end(), normalize_group(m.group(1), m.group(2))) for m in _GROUP.finditer(t)]
+    for m in _BARE_SIGN.finditer(t):
+        if any(s <= m.start() < e for s, e, _ in found):
+            continue
+        before = [g for s, _, g in sorted(found) if s < m.start()]
+        if before:
+            found.append((m.start(), m.end(), normalize_group(before[-1][:-1], m.group(1))))
+    return [g for _, _, g in sorted(found)]
+
+
+def ambiguous_groups(text: str, group: str) -> list[str]:
+    """Group mentions we cannot pin to exactly `group`: a letter with no sign ('O hai'), a non-group
+    letter ('D negative'), or a lone sign opposite to the requested one ('positive hai' for O-)."""
+    t = words_to_digits(text)
+    spans = [(m.start(), m.end()) for m in _GROUP.finditer(t)]
+    out = [m.group(0) for m in _BAD_LETTER.finditer(t)]
+    for m in _LETTER.finditer(t):
+        if any(s <= m.start() < e for s, e in spans):
+            continue
+        if _LETTER_BEFORE.search(t[: m.start()]) or _LETTER_AFTER.match(t[m.end():]):
+            out.append(m.group(0))
+    if not spans:
+        want_neg = group.endswith("-")
+        out += [m.group(0) for m in _BARE_SIGN.finditer(t) if (m.group(1).lower() in {"negative", "-ve"}) != want_neg]
+    return out
 
 
 def vendor_groups(transcript: str) -> list[str]:
     return [g for _, ln in _lines(transcript, "user") for g in parse_groups(ln)]
+
+
+def vendor_ambiguous(transcript: str, group: str) -> list[str]:
+    return [a for _, ln in _lines(transcript, "user") for a in ambiguous_groups(ln, group)]
 
 
 def parse_units(transcript: str) -> int | None:
@@ -205,8 +270,14 @@ def parse_units(transcript: str) -> int | None:
 
 
 def parse_fee(transcript: str) -> int | None:
-    """Processing fee per unit (rupees) as stated by the facility."""
-    found = [a for _, ln in _lines(transcript, "user") for a in _amounts(ln) if a >= 100]
+    """Processing fee per unit (rupees) as stated by the facility. Phone numbers ('98765 43210'),
+    bag sizes ('350 ml') and ward/counter numbers are removed first."""
+    found = [
+        a
+        for _, ln in _lines(transcript, "user")
+        for a in _amounts(_NOT_FEE.sub(" ", _PHONE.sub(" ", ln)))
+        if 100 <= a <= 20_000
+    ]
     return found[-1] if found else None
 
 
@@ -218,26 +289,82 @@ def parse_staff(transcript: str) -> str | None:
     return None
 
 
+def denies(text: str) -> bool:
+    """The text says no / not available (ignoring 'no problem' and the like)."""
+    t = _BENIGN.sub(" ", words_to_digits(text))
+    return bool(_UNAVAILABLE.search(t) or _NEGATE.search(t))
+
+
 def said_unavailable(transcript: str) -> bool:
-    return any(_UNAVAILABLE.search(ln) for _, ln in _lines(transcript, "user"))
+    return any(_UNAVAILABLE.search(_BENIGN.sub(" ", ln)) for _, ln in _lines(transcript, "user"))
+
+
+def _role(ln: str) -> str | None:
+    low = ln.lower()
+    return "user" if low.startswith("user:") else "assistant" if low.startswith("assistant:") else None
+
+
+def _last_readback(lines: list[str]) -> int | None:
+    """Index of the agent's last read-back: an assistant line saying 'confirm' and naming a group,
+    that is not itself a question about stock."""
+    idx = None
+    for i, ln in enumerate(lines):
+        if _role(ln) == "assistant":
+            body = ln.split(":", 1)[1]
+            if _CONFIRM.search(body) and not _ASKING.search(body) and parse_groups(body):
+                idx = i
+    return idx
+
+
+def readback_units(transcript: str) -> int | None:
+    lines = transcript.splitlines()
+    if (i := _last_readback(lines)) is None:
+        return None
+    counts = [int(m.group(1)) for m in _UNIT_COUNT.finditer(words_to_digits(lines[i].split(":", 1)[1]))]
+    return counts[-1] if counts else None
+
+
+def _clean_yes(reply: str, group: str, units: int | None) -> bool:
+    t = _BENIGN.sub(" ", words_to_digits(reply))
+    if "?" in t:  # "correct?" is an echo of the agent's question, not an answer
+        return False
+    t = _STAFF.sub(" ", t)
+    if any(g != group for g in parse_groups(t)) or ambiguous_groups(t, group):
+        return False
+    t = _GROUP.sub(" ", t)
+    if any(int(m.group(1)) != units for m in _UNIT_COUNT.finditer(t)):
+        return False
+    t = _TIME.sub(" ", _UNIT_COUNT.sub(" ", t))
+    toks = re.findall(r"[a-z']+|\d+", t.lower())
+    return any(w in _YES for w in toks) and all(w in _YES or w in _FILLER for w in toks)
 
 
 def readback_confirmed(transcript: str, group: str) -> bool | None:
-    """Did the facility say yes right after the agent read back the requested group?
-    None = no read-back happened."""
+    """Did the facility clearly say yes right after the agent read back the requested group?
+    None = no read-back happened. False when the last read-back named any other group, the reply
+    was anything but a plain yes, or the staff later took it back ('wait, sorry, it's finished')."""
     lines = transcript.splitlines()
-    last_rb = None
-    for i, ln in enumerate(lines):
-        # only an explicit read-back counts, not the agent's opening question ("Do you have O negative?")
-        if ln.lower().startswith("assistant:") and re.search(r"\bconfirm", ln, re.I) and group in parse_groups(ln):
-            last_rb = i
-    if last_rb is None:
+    if (last := _last_readback(lines)) is None:
         return None
-    for ln in lines[last_rb + 1:]:
-        if ln.lower().startswith("user:"):
-            reply = re.sub(r"no (problem|issue|worries)", "", ln.split(":", 1)[1], flags=re.I)
-            return bool(_AFFIRM.search(reply)) and not _NEGATE.search(reply)
-    return None
+    if set(parse_groups(lines[last].split(":", 1)[1])) != {group}:
+        return False
+    reply: list[str] = []
+    later: list[str] = []
+    ended = False  # an agent turn after the reply ends the direct reply
+    for ln in lines[last + 1:]:
+        role = _role(ln)
+        if role == "assistant" and reply:
+            ended = True
+        elif role == "user":
+            (later if ended else reply).append(ln.split(":", 1)[1])
+    if not reply:
+        return None
+    if not _clean_yes(" ".join(reply), group, readback_units(transcript)):
+        return False
+    for ln in later:
+        if denies(ln) or _RETRACT.search(ln) or any(g != group for g in parse_groups(ln)) or ambiguous_groups(ln, group):
+            return False
+    return True
 
 
 def parse_slot(transcript: str, extracted: dict[str, Any] | None = None) -> str | None:
