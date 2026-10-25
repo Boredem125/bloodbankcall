@@ -47,7 +47,8 @@ class SimProvider:
         personas = sim.get("personas") or [sim.get("persona", "has_stock")]
         return personas[min(idx, len(personas) - 1)]
 
-    async def start(self, facility: Facility, phone: Phone, user_data: dict[str, Any]) -> str:
+    async def start(self, facility: Facility, phone: Phone, user_data: dict[str, Any],
+                    agent_id: str | None = None) -> str:
         sim = {"units": 3, "fee": 1550, "staff": "Ramesh", "ring_s": 3, "talk_s": 18, **facility.sim}
         script = self.scripts[self.persona(facility, phone)]
         fill = _Blank({**sim, **user_data})

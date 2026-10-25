@@ -58,7 +58,16 @@
       <li data-step="done">Where to go</li>
     </ol>
 
-    <div id="empty" class="empty">Pick a blood group and press <b>Find blood now</b>. Every blood bank is called in parallel; only answers that pass the safety check are shown as available.</div>
+    <section class="panel inbox" id="inbox">
+      <div class="inbox-head">
+        <h3>Incoming calls</h3>
+        {% if inbound_number %}<span class="hotline">Families call <b>{{ inbound_number }}</b></span>
+        {% else %}<span class="meta">No inbound number yet. Simulate one: <code>python scripts\sim_inbound.py O- 2</code></span>{% endif %}
+      </div>
+      <ul id="inbox-list" class="inbox-list"><li class="meta">Waiting for the first call…</li></ul>
+    </section>
+
+    <div id="empty" class="empty">Pick a blood group and press <b>Find blood now</b>, or let a family phone in. Every blood bank is called in parallel; only answers that pass the safety check are shown as available.</div>
 
     <div id="verdict" class="panel verdict hidden"></div>
     <div id="calls" class="calls"></div>

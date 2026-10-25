@@ -193,3 +193,12 @@ def test_pickup_stats_persist(tmp_path):
     assert again._counts["+910000000101"][4] == [1, 2]
     path.write_text("not json", encoding="utf-8")
     assert PickupStats(path).chance("+910000000101", hour=4) == 0.5  # unreadable file: start fresh
+
+
+async def test_single_confirmed_bank_skips_final_decision(orch, store):
+    # Clef rejects a choice question with one option (422); with one candidate there is nothing to decide
+    orch.facilities = [f for f in orch.facilities if f.id == "sanjeevani"]
+    s = await run(orch, store, blood_group="O-", units=2)
+    assert s.status == "done" and s.choice_confidence == 1.0
+    assert [d.stage for d in s.decisions] == ["call"]
+

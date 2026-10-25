@@ -258,9 +258,14 @@ class Orchestrator:
             return
 
         shortlist = ranked[:5]
-        answers, backend = await self._decide(search, "final", final_state(req, shortlist), final_questions(req, shortlist))
-        picked, conf = choice(answers, "best_facility")
-        chosen = next((c for c in shortlist if c.id == picked), shortlist[0])
+        if len(shortlist) == 1:
+            # nothing to choose between; Clef also rejects a single-option choice question (422)
+            chosen, conf = shortlist[0], 1.0
+            search.note(f"Only {chosen.facility.name} confirmed; no ranking decision needed")
+        else:
+            answers, backend = await self._decide(search, "final", final_state(req, shortlist), final_questions(req, shortlist))
+            picked, conf = choice(answers, "best_facility")
+            chosen = next((c for c in shortlist if c.id == picked), shortlist[0])
         search.chosen_call_id, search.choice_confidence = chosen.id, round(conf, 3)
         search.plan = plan_units(ranked, chosen, req.units)
         search.reason = explain(chosen, search)

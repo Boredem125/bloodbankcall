@@ -38,6 +38,15 @@ def _id() -> str:
     return uuid.uuid4().hex[:10]
 
 
+def mask_number(number: str | None) -> str | None:
+    """+919876543210 -> +91XXXXXX3210. The dashboard never shows a caller's full number."""
+    if not number:
+        return number
+    keep = number[-4:]
+    head = number[:3] if number.startswith("+") else ""
+    return head + "X" * max(len(number) - len(head) - 4, 0) + keep
+
+
 class BloodRequest(BaseModel):
     blood_group: BloodGroup = "O-"
     component: Literal["prbc", "whole_blood", "platelets", "ffp"] = "prbc"
@@ -120,6 +129,13 @@ class Search(BaseModel):
     reason: str | None = None
     warnings: list[str] = Field(default_factory=list)
     log: list[str] = Field(default_factory=list)
+    # Phone intake: the family called our number; we call them back with the plan.
+    source: Literal["web", "phone"] = "web"
+    caller: str | None = None  # E.164; shown masked on the dashboard
+    intake_execution_id: str | None = None
+    callback_status: str | None = None  # queued | ringing | completed | no-answer | ... | skipped
+    callback_execution_id: str | None = None
+    sms_status: str | None = None
 
     def call(self, call_id: str) -> CallRecord:
         return next(c for c in self.calls if c.id == call_id)

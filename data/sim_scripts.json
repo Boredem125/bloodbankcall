@@ -124,7 +124,28 @@
       "user: Wait, sorry, those units were just issued to another patient. It is finished."
     ]
   },
-  "no_answer": {"lines": [], "final": "no-answer", "ring_s": 7},
-  "busy": {"lines": [], "final": "busy"},
-  "voicemail": {"lines": [], "final": "voicemail", "ring_s": 5}
+  "no_answer": {
+    "lines": [],
+    "final": "no-answer",
+    "ring_s": 7
+  },
+  "busy": {
+    "lines": [],
+    "final": "busy"
+  },
+  "voicemail": {
+    "lines": [],
+    "final": "voicemail",
+    "ring_s": 5
+  },
+  "family_callback": {
+    "ring_s": 2,
+    "lines": [
+      "assistant: Namaste, this is BloodBankCall calling back about the blood you asked for. Can you hear me?",
+      "user: Yes, tell me.",
+      "assistant: {plan_spoken}",
+      "user: Okay, understood. Thank you.",
+      "assistant: I have sent the same details by SMS. Go now, and confirm at the counter when you arrive. Take care."
+    ]
+  }
 }

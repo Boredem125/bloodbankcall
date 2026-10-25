@@ -5,3 +5,4 @@ __pycache__/
 .pytest_cache/
 *.pyc
 data/pickup_stats.json
+data/facilities_demo.json

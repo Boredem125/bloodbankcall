@@ -20,6 +20,18 @@ class Settings(BaseSettings):
     poll_interval_s: float = 4.0
     call_timeout_s: float = 300.0
 
+    # Phone intake: a family calls BOLNA_INBOUND_NUMBER, the intake agent takes the request, Bolna's
+    # webhook brings us the transcript + extractions, we search, then the callback agent rings them back.
+    bolna_intake_agent_id: str = ""  # scripts/create_intake_agent.py
+    bolna_callback_agent_id: str = ""
+    bolna_inbound_number: str = ""  # the number families call (bought/attached on Bolna); shown on the dashboard
+    webhook_token: str = ""  # if set, /webhooks/bolna requires ?token=<this>
+    callback_delay_s: float = 0.0  # wait before ringing the family back (their line may still be busy)
+    sms_provider: str = "none"  # none | plivo | twilio
+    sms_auth_id: str = ""  # Plivo auth id / Twilio account sid
+    sms_auth_token: str = ""
+    sms_from: str = ""  # sender number (E.164) or Indian sender id
+
     # Decisions: jev | clef | mock. Failures fall back down the chain; mock answers are
     # never trusted to confirm availability during live calls.
     decision_backend: str = "mock"

@@ -30,9 +30,35 @@ $("#search-form").addEventListener("submit", async (e) => {
 
 function watch(id) {
   if (source) source.close();
+  watching = id;
   source = new EventSource(`/searches/${id}/stream`);
   source.onmessage = (ev) => render(JSON.parse(ev.data));
 }
+
+// ---- incoming calls: families who phoned the hotline (and web searches), newest first
+let watching = null;
+const seen = new Set();
+const ago = (t) => { const s = Math.max(0, Math.round(Date.now() / 1000 - t)); return s < 60 ? `${s}s ago` : `${Math.round(s / 60)} min ago`; };
+async function pollInbox() {
+  try {
+    const rows = await (await fetch("/searches?limit=8")).json();
+    if (!rows.length) return;
+    $("#inbox-list").innerHTML = rows.map((r) => `<li data-id="${esc(r.id)}" class="${r.source} ${r.id === watching ? "watching" : ""}">
+        <span class="src" title="${r.source === "phone" ? "phoned in" : "web form"}">${r.source === "phone" ? "📞" : "🖥"}</span>
+        <span class="grp">${esc(r.blood_group)}</span><span>${r.units} unit(s) · ${esc(r.area)}</span>
+        ${r.caller ? `<span class="meta">${esc(r.caller)}</span>` : ""}
+        <span class="pill ${esc(r.status)}">${esc(r.status)}</span>
+        ${r.chosen ? `<span class="meta">→ ${esc(r.chosen)}</span>` : ""}
+        ${r.callback_status ? `<span class="cb">callback: ${esc(r.callback_status)}</span>` : ""}
+        <span class="when">${ago(r.created_at)}</span></li>`).join("");
+    // a new phone request arrived: show it, unless the operator is watching a search still running
+    const newest = rows.find((r) => r.source === "phone" && !seen.has(r.id));
+    rows.forEach((r) => seen.add(r.id));
+    if (newest && (!current || ["done", "failed"].includes(current.status))) watch(newest.id);
+  } catch (_) { /* server restarting */ }
+}
+$("#inbox-list").addEventListener("click", (e) => { const li = e.target.closest("li[data-id]"); if (li) watch(li.dataset.id); });
+pollInbox(); setInterval(pollInbox, 4000);
 
 function render(s) {
   current = s;
@@ -44,6 +70,7 @@ function render(s) {
   });
   renderVerdict(s);
   renderCalls(s);
+  document.querySelectorAll("#inbox-list li").forEach((li) => li.classList.toggle("watching", li.dataset.id === s.id));
   renderCompare(s);
   renderDecisions(s);
   $("#log").innerHTML = s.log.slice().reverse().map((l) => `<li>${esc(l)}</li>`).join("");
@@ -59,7 +86,7 @@ function renderVerdict(s) {
   const warn = s.warnings?.length ? `<ul class="warnings">${s.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : "";
   if (s.status === "failed") {
     v.className = "panel verdict failed";
-    v.innerHTML = `<h3>No confirmed blood yet</h3><p class="why">${esc(s.reason)}</p>${warn}${gopackHtml(s)}`;
+    v.innerHTML = `<h3>No confirmed blood yet</h3><p class="why">${esc(s.reason)}</p>${warn}${callbackHtml(s)}${gopackHtml(s)}`;
     return;
   }
   const chosen = s.calls.find((c) => c.id === s.chosen_call_id);
@@ -78,7 +105,15 @@ function renderVerdict(s) {
       <span>📞 ${esc(chosen.phone.number)}</span>
       <span>choice confidence ${pct(s.choice_confidence)}</span>
     </div>
-    <p class="why">${esc(s.reason)}</p>${plan}${warn}${gopackHtml(s)}`;
+    <p class="why">${esc(s.reason)}</p>${plan}${warn}${callbackHtml(s)}${gopackHtml(s)}`;
+}
+
+function callbackHtml(s) {
+  if (s.source !== "phone") return "";
+  const mask = (n) => (n ? n.replace(/^(\+\d{2})?(\d+)(\d{4})$/, (_, cc, mid, tail) => (cc || "") + "X".repeat(mid.length) + tail) : "unknown");
+  return `<div class="callback"><span>📞 Phoned in from <b>${esc(mask(s.caller))}</b></span>
+    ${s.callback_status ? `<span>Callback: <b>${esc(s.callback_status)}</b></span>` : `<span>Callback: after the search</span>`}
+    ${s.sms_status ? `<span>SMS: <b>${esc(s.sms_status)}</b></span>` : ""}</div>`;
 }
 
 // ---- family handoff ("go-pack"): fetched once a search has finished

@@ -7,6 +7,9 @@
 ## How it works
 
 ```
+Family dials one number ─▶ intake agent takes group (said two ways + read-back), component, units, area
+  ─▶ hangs up ─▶ search below ─▶ calls the family back with where to go, and SMSes it
+  (or: Request typed on the dashboard)
 Request (group, component, units, area)
   ─▶ call blood banks in waves: 24×7 first, then nearest; Bolna voice agent, 2+ in parallel
        direct line no answer? ─▶ try the switchboard ─▶ "please connect me to the blood bank"
@@ -45,6 +48,8 @@ copy .env.example .env
 
 Open http://localhost:8000, pick **O-**, and press **Find blood now**. The simulated blood banks cover every path: stock, partial stock, replacement donor, out of stock, misheard group, ambiguous answer, switchboard transfer, closed, no answer, voicemail.
 
+Pretend a family phoned in: `.venv\Scripts\python scripts\sim_inbound.py O- 2 "HSR Layout"`. It shows up in **Incoming calls**, the search runs, and the simulated callback reads the plan. See [docs/PHONE_INTAKE.md](docs/PHONE_INTAKE.md) for the real thing.
+
 Tests: `.venv\Scripts\python -m pytest`
 
 ## Real decisions and real calls
@@ -57,6 +62,7 @@ Tests: `.venv\Scripts\python -m pytest`
   3. `scripts\test_call.py +91XXXXXXXXXX O-` makes one test call to your own phone.
 
   Trial accounts can only call verified numbers. Put those in `data/facilities_live.json` (gitignored) and set `FACILITIES_FILE` and `LIVE_MODE=true`.
+- **Phone intake (voice in, voice out):** `scripts\create_intake_agent.py` creates the intake and callback agents, the post-call extractions and links an inbound number. Steps in [docs/PHONE_INTAKE.md](docs/PHONE_INTAKE.md).
 
 Real calls so far: 51–61 s each, 6–9 cents per call.
 
@@ -70,4 +76,6 @@ Real calls so far: 51–61 s each, 6–9 cents per call.
 | Transcript parsing (groups, units, fee, staff, read-back) | `app/parsing.py` |
 | Bolna provider / free simulator | `app/providers/` |
 | Agent prompt | `agent/blood_bank_caller_prompt.md` |
+| Phone intake: webhook → request → callback script | `app/intake.py`, `agent/intake_prompt.md`, `agent/callback_prompt.md` |
+| SMS (Plivo/Twilio, optional) | `app/notify.py` |
 | Dashboard | `app/templates/index.html`, `app/static/` |
