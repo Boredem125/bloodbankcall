@@ -25,7 +25,10 @@ def gate(call: CallRecord, req: BloodRequest, trusted: bool) -> None:
     if call.status in NOT_REACHED or call.status != "completed":
         call.availability, call.gate_reasons = "unknown", [f"call {call.status}"]
         return
-    if call.outcome == "closed" or s.get("open_now", 1) < 0.3:
+    # Only an explicit "closed" outcome means closed. A low open_now score alone must not
+    # override a bank that said it has (some of) the blood: that is a partial or unclear
+    # answer, handled below, not a closure.
+    if call.outcome == "closed" or (s.get("open_now", 1) < 0.3 and call.outcome not in {"available", "partial"}):
         call.availability, call.gate_reasons = "closed", ["closed now"]
         return
     if s.get("has_requested", 0) < 0.5:

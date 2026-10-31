@@ -68,3 +68,19 @@ def test_plan_tops_up_from_next_bank():
         gate(c, REQ, trusted=True)
     plan = plan_units(rank([a, b]), a, needed=3)
     assert [(p.facility, p.units) for p in plan] == [("a", 1), ("b", 2)]
+
+
+def test_partial_stock_with_low_open_now_is_not_closed():
+    # Regression: a bank that said it has 3 of 5 units was logged as "closed" because the
+    # open_now score was low. Only an explicit closed outcome means closed.
+    c = call(units=3, open_now=0.19)
+    c.outcome = "partial"
+    gate(c, REQ, trusted=True)
+    assert c.availability != "closed"
+
+
+def test_explicit_closed_outcome_is_closed():
+    c = call(open_now=0.95)
+    c.outcome = "closed"
+    gate(c, REQ, trusted=True)
+    assert c.availability == "closed"
