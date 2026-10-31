@@ -1,6 +1,6 @@
 # BloodBankCall risk register
 
-Scope: the whole product as of 2026-10-17 (branch ``). BloodBankCall phones blood
+Scope: the whole product as of 2026-10-17. BloodBankCall phones blood
 banks in parallel through a Bolna voice agent, parses the transcripts, asks a typed decision model
 (Jev / Clef, mock offline) atomic questions, and only shows a facility as **confirmed** when the
 model and deterministic transcript checks agree (`app/ranking.py` `gate()`).
